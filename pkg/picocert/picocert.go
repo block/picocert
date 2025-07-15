@@ -137,8 +137,10 @@ func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64
 		return nil, err
 	}
 
-	pub := append([]byte{0x04}, priv.PublicKey.X.Bytes()...)
-	pub = append(pub, priv.PublicKey.Y.Bytes()...)
+	// Ensure x, y are exactly 32 bytes when constructing the pubkey
+	xBytes := priv.PublicKey.X.FillBytes(make([]byte, 32))
+	yBytes := priv.PublicKey.Y.FillBytes(make([]byte, 32))
+	pub := append([]byte{0x04}, append(xBytes, yBytes...)...)
 
 	var pubKey [MaxPubKeyLen]byte
 	copy(pubKey[:], pub)
