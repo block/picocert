@@ -5,7 +5,7 @@
 
 The library consists of:
 
-- **C Library**: Core certificate validation and signature verification (`picocert.c/h`)
+- **C Library**: Core certificate validation and signature verification (header-only `picocert.h`)
 - **Go Package**: Certificate management tools and CLI (`pkg/picocert`, `cmd/picocert`)
 - **CLI Tool**: Command-line interface for certificate operations
 - **PKI Scripts**: Helper scripts for setting up certificate hierarchies
@@ -46,106 +46,103 @@ typedef struct {
 
 Total size: **184 bytes** (packed)
 
-## C Library API
+## C Library
 
-### Setting Up Time Callback
+The C library is header-only and uses a context for dependency injection of function pointers.
 
-Before using the library, set up a time callback for certificate validity checking:
-
-```c
-#include "picocert.h"
-
-uint64_t get_current_time(void) {
-    // Return current Unix timestamp
-    return (uint64_t)time(NULL);
-}
-
-int main() {
-    picocert_set_time_fn(get_current_time);
-    // ... rest of your code
-}
-```
-
-### Verifying Data with a Certificate Chain
+### API
 
 The main API functions are:
 
 ```c
+// Initialize context with crypto functions
+static picocert_err_t picocert_init_context(picocert_context_t* ctx,
+                                            picocert_hash_fn_t hash_fn,
+                                            picocert_ecc_verify_fn_t ecc_verify_fn,
+                                            picocert_time_fn_t time_fn);
+
 // Verify a hash with certificate chain validation
-picocert_err_t picocert_verify_hash_and_validate_chain(const picocert_t* cert_chain,
-                                                       const uint32_t chain_len,
-                                                       const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-                                                       const uint8_t signature[ECC_SIG_SIZE]);
+static picocert_err_t picocert_verify_hash_and_validate_chain(picocert_context_t* ctx,
+                                                             const picocert_t* cert_chain,
+                                                             const uint32_t chain_len,
+                                                             const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
+                                                             const uint8_t signature[ECC_SIG_SIZE]);
 
 // Verify hash with a single certificate (no chain validation)
-picocert_err_t picocert_verify_hash(const picocert_t* cert,
-                                    const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-                                    const uint8_t signature[ECC_SIG_SIZE]);
+static picocert_err_t picocert_verify_hash(picocert_context_t* ctx,
+                                           const picocert_t* cert,
+                                           const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
+                                           const uint8_t signature[ECC_SIG_SIZE]);
 
 // Validate certificate chain (without data verification)
-picocert_err_t picocert_validate_cert_chain(const picocert_t* cert_chain,
-                                           const uint32_t chain_len);
+static picocert_err_t picocert_validate_cert_chain(picocert_context_t* ctx,
+                                                   const picocert_t* cert_chain,
+                                                   const uint32_t chain_len);
+
+// Validate a single certificate against its issuer
+static picocert_err_t picocert_validate_cert(picocert_context_t* ctx,
+                                             const picocert_t* issuer,
+                                             const picocert_t* subject);
 ```
-
-- `cert_chain`: Array of certificates, starting with the leaf and ending with the root.
-- `chain_len`: Number of certificates in the chain.
-- `hash`: Pre-computed SHA-256 hash of the data.
-- `signature`: ECDSA signature to verify.
-
-Returns `PICOCERT_OK` (0) on success, or an error code.
 
 #### Example
 
 ```c
 #include "picocert.h"
 
+// Example hash function (you must provide your own)
+bool my_sha256_hash(const uint8_t* data, uint32_t data_len,
+                    uint8_t* digest, uint32_t digest_len) {
+    return true;
+}
+
+// Example ECC verification function (you must provide your own)
+bool my_ecc_verify(const uint8_t* key, size_t key_size,
+                   const uint8_t* hash, uint32_t hash_len,
+                   const uint8_t* signature) {
+    return true;
+}
+
+// Time callback for certificate validity checking
+uint64_t get_current_time(void) {
+    return (uint64_t)time(NULL);
+}
+
+picocert_context_t ctx;
+picocert_init_context(&ctx, my_sha256_hash, my_ecc_verify, get_current_time);
+
 picocert_t certs[2]; // [0] = leaf, [1] = root
 // ... fill certs, hash the data, and obtain signature ...
 uint8_t data_hash[HASH_SHA256_DIGEST_SIZE] = { ... };
 uint8_t signature[ECC_SIG_SIZE] = { ... };
 
-picocert_err_t err = picocert_verify_hash_and_validate_chain(certs, 2, data_hash, signature);
+picocert_err_t err = picocert_verify_hash_and_validate_chain(&ctx, certs, 2, data_hash, signature);
 if (err == PICOCERT_OK) {
     // Data is valid and cert chain is trusted
 } else {
     // Handle error
 }
 ```
-
-### Debug Functions
-
-```c
-// Print certificate contents in human-readable format
-void picocert_print_cert(const picocert_t* cert);
-```
-
-### Certificate Validation Details
-
-The validation functions perform:
-
-1. **Certificate chain validation:**
-    - Each cert is signed by the next (issuer).
-    - The root cert must be self-signed.
-    - Validity periods are checked against current time.
-    - Reserved fields must be zero.
-    - Version numbers must match.
-    - Issuer/subject name consistency is verified.
-2. **Signature verification:**
-    - The leaf cert's public key is used to verify the data signature.
-
 ### Error Codes
 
-| Error Code                  | Value | Meaning                        |
-|-----------------------------|-------|--------------------------------|
-| PICOCERT_OK                 | 0     | Success                        |
-| PICOCERT_ERR_INVALID        | 1     | Invalid argument               |
-| PICOCERT_ERR_EXPIRED        | 2     | Certificate expired/not yet valid |
-| PICOCERT_ERR_SIGNATURE      | 3     | Signature verification failed  |
-| PICOCERT_ERR_ISSUER         | 4     | Issuer/subject mismatch        |
-| PICOCERT_ERR_VERSION        | 5     | Version mismatch               |
-| PICOCERT_ERR_RESERVED       | 6     | Reserved field nonzero         |
-| PICOCERT_ERR_NOT_SELF_SIGNED| 7     | Root not self-signed           |
-| PICOCERT_ERR_UNKNOWN        | 255   | Unknown error                  |
+| Error Code                      | Value | Meaning                           |
+|---------------------------------|-------|-----------------------------------|
+| PICOCERT_OK                     | 0     | Success                           |
+| PICOCERT_ERR_INVALID            | 1     | Invalid argument                  |
+| PICOCERT_ERR_EXPIRED            | 2     | Certificate expired/not yet valid |
+| PICOCERT_ERR_SIGNATURE          | 3     | Signature verification failed     |
+| PICOCERT_ERR_ISSUER             | 4     | Issuer/subject mismatch           |
+| PICOCERT_ERR_VERSION            | 5     | Version mismatch                  |
+| PICOCERT_ERR_RESERVED           | 6     | Reserved field nonzero            |
+| PICOCERT_ERR_NOT_SELF_SIGNED    | 7     | Root not self-signed              |
+| PICOCERT_ERR_INVALID_FORMAT     | 8     | Invalid certificate format        |
+| PICOCERT_ERR_CONTEXT_NOT_INITIALIZED | 9 | Context not properly initialized  |
+| PICOCERT_ERR_HASH_FAILED        | 10    | Hash computation failed           |
+| PICOCERT_ERR_UNSUPPORTED_CURVE  | 11    | Unsupported curve                 |
+| PICOCERT_ERR_UNSUPPORTED_HASH   | 12    | Unsupported hash algorithm        |
+| PICOCERT_ERR_INVALID_VALIDITY_PERIOD | 13 | Invalid validity period          |
+| PICOCERT_ERR_CHAIN_TOO_LONG     | 14    | Certificate chain too long        |
+| PICOCERT_ERR_UNKNOWN            | 255   | Unknown error                     |
 
 ## CLI Tool
 
@@ -194,7 +191,7 @@ picocert verify --cert certificate.pct --binary firmware.bin --signature firmwar
 
 ## Setting Up a Three-Tier PKI
 
-Use the included script to set up a complete PKI hierarchy:
+Use the included script to set up a PKI hierarchy:
 
 ```bash
 # Set up a three-tier PKI for firmware signing
@@ -206,7 +203,7 @@ Use the included script to set up a complete PKI hierarchy:
 # - firmware-leaf.pct/priv.der (Leaf certificate, 4-year validity)
 ```
 
-**⚠️ Warning**: The script uses long validity periods suitable for testing. For production use, consider shorter validity periods and proper key management practices.
+**⚠️ Warning**: The script uses long validity periods. Consider your own needs for production use.
 
 ## Go Package
 
@@ -354,7 +351,7 @@ const (
 - Public key is uncompressed (0x04 | X | Y, 65 bytes).
 - Signature is raw ECDSA (r||s, 64 bytes).
 - Timestamps are Unix epoch seconds.
-- The C library requires a time callback to be set for certificate validation.
+- Certificate data is stored in little-endian format for embedded compatibility.
 
 ## File Formats
 
@@ -369,3 +366,5 @@ const (
 - Implement proper key rotation and certificate renewal procedures
 - Validate certificate chains completely before trusting signatures
 - Use appropriate validity periods for your security requirements
+- Provide secure implementations of the required cryptographic functions
+- The library enforces a maximum chain length to prevent DoS
