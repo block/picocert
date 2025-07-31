@@ -42,7 +42,7 @@ typedef struct {
 | hash          | 1            | Hash ID (0 = SHA-256)              |
 | reserved      | 4            | Reserved, must be zero             |
 | public_key    | 65           | Uncompressed ECC public key (SEC1) |
-| signature     | 64           | ECDSA signature raw (r||s)         |
+| signature     | 64           | ECDSA signature raw (r\|\|s)       |
 
 Total size: **184 bytes** (packed)
 
