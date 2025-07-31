@@ -9,8 +9,11 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/big"
+	"strings"
 	"time"
 )
 
@@ -292,4 +295,44 @@ func VerifyAndValidateChain(chain []Certificate, data, sig []byte) error {
 		return err
 	}
 	return Verify(&chain[0], data, sig)
+}
+
+func (c Certificate) String() string {
+	var b strings.Builder
+
+	issuer := bytes.TrimRight(c.Issuer[:], "\x00")
+	subject := bytes.TrimRight(c.Subject[:], "\x00")
+
+	fmt.Fprintf(&b, "Certificate:\n")
+	fmt.Fprintf(&b, "  Version:  %d\n", c.Version)
+	fmt.Fprintf(&b, "  Issuer:  %.*s\n", len(issuer), issuer)
+	fmt.Fprintf(&b, "  Subject: %.*s\n", len(subject), subject)
+	fmt.Fprintf(&b, "  Valid From: %s\n",
+		time.Unix(int64(c.ValidFrom), 0).UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "  Valid To:   %s\n",
+		time.Unix(int64(c.ValidTo), 0).UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "  Curve:    %d\n", c.Curve)
+	fmt.Fprintf(&b, "  Hash:     %d\n", c.Hash)
+	fmt.Fprintf(&b, "  Reserved: %d\n", c.Reserved)
+
+	b.WriteString("  Public Key:\n")
+	writeHexBlock(&b, c.PubKey[:])
+
+	b.WriteString("  Signature:\n")
+	writeHexBlock(&b, c.Signature[:])
+
+	return b.String()
+}
+
+func writeHexBlock(b *strings.Builder, data []byte) {
+	const lineBytes = 16
+	hexStr := hex.EncodeToString(data)
+
+	for i := 0; i < len(hexStr); i += lineBytes * 2 { // 2 hex chars per byte
+		end := i + lineBytes*2
+		if end > len(hexStr) {
+			end = len(hexStr)
+		}
+		fmt.Fprintf(b, "    %s\n", hexStr[i:end])
+	}
 }

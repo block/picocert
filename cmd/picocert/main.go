@@ -98,6 +98,18 @@ func main() {
 				},
 				Action: verifyBinary,
 			},
+			{
+				Name:  "print",
+				Usage: "Print certificate details",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "cert",
+						Usage:    "Path to the certificate file",
+						Required: true,
+					},
+				},
+				Action: printCertificate,
+			},
 		},
 	}
 
@@ -248,6 +260,24 @@ func verifyBinary(c *cli.Context) error {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
 	fmt.Println("Signature verification succeeded.")
+
+	return nil
+}
+
+func printCertificate(c *cli.Context) error {
+	certPath := c.String("cert")
+
+	// Read the certificate
+	certBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		return fmt.Errorf("unable to read certificate: %w", err)
+	}
+	cert, err := picocert.ParseCertificate(certBytes)
+	if err != nil {
+		return fmt.Errorf("unable to parse certificate: %w", err)
+	}
+
+	fmt.Println(cert)
 
 	return nil
 }
