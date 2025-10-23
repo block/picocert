@@ -7,15 +7,15 @@
 #include <stdio.h>
 #include <string.h>
 
-#define HASH_SHA256_DIGEST_SIZE 32
-#define ECC_SIG_SIZE 64
-#define ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED 64
+#define PICOCERT_HASH_SHA256_DIGEST_SIZE 32
+#define PICOCERT_ECC_SIG_SIZE 64
+#define PICOCERT_ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED 64
 
 // Attribute macros
 #ifdef __GNUC__
-#define PACKED __attribute__((packed))
+#define PICOCERT_PACKED __attribute__((packed))
 #else
-#define PACKED
+#define PICOCERT_PACKED
 #endif
 
 // Maximum length for names (issuer and subject) in the certificate
@@ -78,7 +78,7 @@ typedef struct {
 
   uint8_t public_key[PICOCERT_MAX_PUBKEY_LEN];
   uint8_t signature[PICOCERT_MAX_SIG_LEN];
-} PACKED picocert_t;
+} PICOCERT_PACKED picocert_t;
 
 /*
  * A certificate chain, stored as a contiguous array of picocert_t structures
@@ -162,7 +162,7 @@ static inline void picocert_set_reserved(picocert_t* cert, uint32_t value) {
  * @param data Input data to hash
  * @param data_len Length of input data
  * @param digest Output buffer for hash (must be at least
- * HASH_SHA256_DIGEST_SIZE bytes)
+ * PICOCERT_HASH_SHA256_DIGEST_SIZE bytes)
  * @param digest_len Size of output buffer
  * @return true on success, false on failure
  */
@@ -173,9 +173,9 @@ typedef bool (*picocert_hash_fn_t)(const uint8_t* data, uint32_t data_len,
  * ECC signature verification function pointer type
  * @param key Pointer to the public key data (X,Y coordinates)
  * @param key_size Size of the public key data
- * @param hash Hash to verify (HASH_SHA256_DIGEST_SIZE bytes)
+ * @param hash Hash to verify (PICOCERT_HASH_SHA256_DIGEST_SIZE bytes)
  * @param hash_len Length of hash
- * @param signature Signature to verify (ECC_SIG_SIZE bytes)
+ * @param signature Signature to verify (PICOCERT_ECC_SIG_SIZE bytes)
  * @return true if signature is valid, false otherwise
  */
 typedef bool (*picocert_ecc_verify_fn_t)(const uint8_t* key, size_t key_size,
@@ -217,7 +217,7 @@ static inline picocert_err_t picocert_cert_to_key(const picocert_t* cert,
 
   // Extract X,Y coordinates
   *key_out = &cert->public_key[1];
-  *key_size_out = ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED;
+  *key_size_out = PICOCERT_ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED;
 
   return PICOCERT_OK;
 }
@@ -270,7 +270,7 @@ static picocert_err_t picocert_verify_cert_signature(
   const uint32_t signable_data_size = offsetof(picocert_t, signature);
 
   // Hash the signable certificate data
-  uint8_t digest[HASH_SHA256_DIGEST_SIZE] = {0};
+  uint8_t digest[PICOCERT_HASH_SHA256_DIGEST_SIZE] = {0};
   if (!ctx->hash_fn((const uint8_t*)cert, signable_data_size, digest,
                     sizeof(digest))) {
     return PICOCERT_ERR_HASH_FAILED;
@@ -283,7 +283,7 @@ static picocert_err_t picocert_verify_cert_signature(
   if (key_err != PICOCERT_OK) {
     return key_err;
   }
-  if (!ctx->ecc_verify_fn(pubkey, pubkey_size, digest, HASH_SHA256_DIGEST_SIZE,
+  if (!ctx->ecc_verify_fn(pubkey, pubkey_size, digest, PICOCERT_HASH_SHA256_DIGEST_SIZE,
                           cert->signature)) {
     return PICOCERT_ERR_SIGNATURE;
   }
@@ -303,7 +303,7 @@ static picocert_err_t picocert_verify_cert_signature(
  * @param time_fn Optional time callback function (can be NULL)
  * @return PICOCERT_OK on success, error code on failure
  */
-static picocert_err_t picocert_init_context(
+static picocert_err_t __attribute__((unused)) picocert_init_context(
     picocert_context_t* ctx, picocert_hash_fn_t hash_fn,
     picocert_ecc_verify_fn_t ecc_verify_fn, picocert_time_fn_t time_fn) {
   if (!ctx) {
@@ -471,10 +471,10 @@ static picocert_err_t picocert_validate_cert_chain(picocert_context_t* ctx,
  * @param signature ECDSA signature to verify against the hash
  * @return PICOCERT_OK if signature is valid, error code otherwise
  */
-static picocert_err_t picocert_verify_hash(
+static picocert_err_t __attribute__((unused)) picocert_verify_hash(
     picocert_context_t* ctx, const picocert_t* cert,
-    const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-    const uint8_t signature[ECC_SIG_SIZE]) {
+    const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+    const uint8_t signature[PICOCERT_ECC_SIG_SIZE]) {
   if (!ctx || !cert || !hash) {
     return PICOCERT_ERR_INVALID;
   }
@@ -490,7 +490,7 @@ static picocert_err_t picocert_verify_hash(
   if (key_err != PICOCERT_OK) {
     return key_err;
   }
-  if (!ctx->ecc_verify_fn(pubkey, pubkey_size, hash, HASH_SHA256_DIGEST_SIZE,
+  if (!ctx->ecc_verify_fn(pubkey, pubkey_size, hash, PICOCERT_HASH_SHA256_DIGEST_SIZE,
                           signature)) {
     return PICOCERT_ERR_SIGNATURE;
   }
@@ -511,10 +511,10 @@ static picocert_err_t picocert_verify_hash(
  * @return            PICOCERT_OK if verification is successful and the chain is
  * valid, otherwise an error code
  */
-static picocert_err_t picocert_verify_hash_and_validate_chain(
+static picocert_err_t __attribute__((unused)) picocert_verify_hash_and_validate_chain(
     picocert_context_t* ctx, const picocert_t* cert_chain,
-    const uint32_t chain_len, const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-    const uint8_t signature[ECC_SIG_SIZE]) {
+    const uint32_t chain_len, const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+    const uint8_t signature[PICOCERT_ECC_SIG_SIZE]) {
   if (!ctx || !cert_chain || chain_len == 0 || !hash || !signature) {
     return PICOCERT_ERR_INVALID;
   }
@@ -532,7 +532,7 @@ static picocert_err_t picocert_verify_hash_and_validate_chain(
   if (key_err != PICOCERT_OK) {
     return key_err;
   }
-  if (!ctx->ecc_verify_fn(pubkey, pubkey_size, hash, HASH_SHA256_DIGEST_SIZE,
+  if (!ctx->ecc_verify_fn(pubkey, pubkey_size, hash, PICOCERT_HASH_SHA256_DIGEST_SIZE,
                           signature)) {
     return PICOCERT_ERR_SIGNATURE;
   }
@@ -556,7 +556,7 @@ static void picocert_print_key_bytes(const uint8_t* key,
  *
  * @param cert Pointer to the certificate to print
  */
-static void picocert_print_cert(const picocert_t* cert) {
+static void __attribute__((unused)) picocert_print_cert(const picocert_t* cert) {
   if (!cert) {
     return;
   }
@@ -570,7 +570,7 @@ static void picocert_print_cert(const picocert_t* cert) {
   printf("  Valid To: %llu\n", (unsigned long long)picocert_get_valid_to(cert));
   printf("  Curve: %u\n", cert->curve);
   printf("  Hash: %u\n", cert->hash);
-  printf("  Reserved: %u\n", picocert_get_reserved(cert));
+  printf("  Reserved: %lu\n", (unsigned long)picocert_get_reserved(cert));
   printf("Public Key:\n  ");
   picocert_print_key_bytes(
       cert->public_key + 1,
