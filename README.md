@@ -65,19 +65,21 @@ static picocert_err_t picocert_init_context(picocert_context_t* ctx,
 static picocert_err_t picocert_verify_hash_and_validate_chain(picocert_context_t* ctx,
                                                              const picocert_t* cert_chain,
                                                              const uint32_t chain_len,
-                                                             const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-                                                             const uint8_t signature[ECC_SIG_SIZE]);
+                                                             const picocert_t* trust_anchor,
+                                                             const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+                                                             const uint8_t signature[PICOCERT_ECC_SIG_SIZE]);
 
 // Verify hash with a single certificate (no chain validation)
 static picocert_err_t picocert_verify_hash(picocert_context_t* ctx,
                                            const picocert_t* cert,
-                                           const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-                                           const uint8_t signature[ECC_SIG_SIZE]);
+                                           const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+                                           const uint8_t signature[PICOCERT_ECC_SIG_SIZE]);
 
 // Validate certificate chain (without data verification)
 static picocert_err_t picocert_validate_cert_chain(picocert_context_t* ctx,
                                                    const picocert_t* cert_chain,
-                                                   const uint32_t chain_len);
+                                                   const uint32_t chain_len,
+                                                   const picocert_t* trust_anchor);
 
 // Validate a single certificate against its issuer
 static picocert_err_t picocert_validate_cert(picocert_context_t* ctx,
@@ -111,12 +113,14 @@ uint64_t get_current_time(void) {
 picocert_context_t ctx;
 picocert_init_context(&ctx, my_sha256_hash, my_ecc_verify, get_current_time);
 
-picocert_t certs[2]; // [0] = leaf, [1] = root
-// ... fill certs, hash the data, and obtain signature ...
-uint8_t data_hash[HASH_SHA256_DIGEST_SIZE] = { ... };
-uint8_t signature[ECC_SIG_SIZE] = { ... };
+picocert_t certs[2]; // [0] = leaf, [1] = root supplied with the payload
+picocert_t trusted_root; // Load this independently from trusted storage.
+// ... fill certs, load trusted_root, hash the data, and obtain signature ...
+uint8_t data_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE] = { ... };
+uint8_t signature[PICOCERT_ECC_SIG_SIZE] = { ... };
 
-picocert_err_t err = picocert_verify_hash_and_validate_chain(&ctx, certs, 2, data_hash, signature);
+picocert_err_t err = picocert_verify_hash_and_validate_chain(
+    &ctx, certs, 2, &trusted_root, data_hash, signature);
 if (err == PICOCERT_OK) {
     // Data is valid and cert chain is trusted
 } else {
@@ -142,6 +146,7 @@ if (err == PICOCERT_OK) {
 | PICOCERT_ERR_UNSUPPORTED_HASH   | 12    | Unsupported hash algorithm        |
 | PICOCERT_ERR_INVALID_VALIDITY_PERIOD | 13 | Invalid validity period          |
 | PICOCERT_ERR_CHAIN_TOO_LONG     | 14    | Certificate chain too long        |
+| PICOCERT_ERR_UNTRUSTED_ROOT     | 15    | Chain does not end at trusted root |
 | PICOCERT_ERR_UNKNOWN            | 255   | Unknown error                     |
 
 ## CLI Tool
@@ -281,16 +286,17 @@ if err != nil {
 #### Certificate Chain Validation
 
 ```go
-// Validate a certificate chain
+// Validate a certificate chain against a root loaded from trusted storage.
 chain := []picocert.Certificate{leafCert, intermediateCert, rootCert}
+trustedRoot := loadPinnedRoot()
 
-err := picocert.ValidateCertChain(chain)
+err := picocert.ValidateCertChain(chain, &trustedRoot)
 if err != nil {
     // Chain validation failed
 }
 
 // Verify data against the chain
-err = picocert.VerifyAndValidateChain(chain, data, signature)
+err = picocert.VerifyAndValidateChain(chain, &trustedRoot, data, signature)
 if err != nil {
     // Verification or validation failed
 }
@@ -364,7 +370,8 @@ const (
 - Private keys should be stored securely and never transmitted in plaintext
 - Consider using hardware security modules (HSMs) for root CA key storage
 - Implement proper key rotation and certificate renewal procedures
-- Validate certificate chains completely before trusting signatures
+- Provision trust anchors independently from untrusted certificate chains, and
+  pass the expected root to every chain-validation call
 - Use appropriate validity periods for your security requirements
 - Provide secure implementations of the required cryptographic functions
 - The library enforces a maximum chain length to prevent DoS

@@ -59,6 +59,7 @@ typedef enum {
   PICOCERT_ERR_UNSUPPORTED_HASH = 12,
   PICOCERT_ERR_INVALID_VALIDITY_PERIOD = 13,
   PICOCERT_ERR_CHAIN_TOO_LONG = 14,
+  PICOCERT_ERR_UNTRUSTED_ROOT = 15,
   PICOCERT_ERR_UNKNOWN = 255,
 } picocert_err_t;
 
@@ -414,6 +415,7 @@ static picocert_err_t picocert_validate_cert(picocert_context_t* ctx,
  *
  * This function validates a certificate chain from leaf to root by:
  * - Enforcing maximum chain length (PICOCERT_MAX_CHAIN_LEN)
+ * - Requiring the terminal certificate to match a trusted root
  * - Validating each certificate in the chain against its issuer
  * - Ensuring the root certificate is self-signed
  * - Validating the root certificate against itself
@@ -426,18 +428,25 @@ static picocert_err_t picocert_validate_cert(picocert_context_t* ctx,
  * @param cert_chain Array of certificates ordered from leaf to root
  * @param chain_len Number of certificates in the chain (1 <= chain_len <=
  * PICOCERT_MAX_CHAIN_LEN)
+ * @param trust_anchor Independently provisioned root certificate to trust
  * @return PICOCERT_OK if entire chain is valid, error code otherwise
  */
 static picocert_err_t picocert_validate_cert_chain(picocert_context_t* ctx,
                                                    const picocert_t* cert_chain,
-                                                   const uint32_t chain_len) {
-  if (!ctx || !cert_chain || chain_len == 0) {
+                                                   const uint32_t chain_len,
+                                                   const picocert_t* trust_anchor) {
+  if (!ctx || !cert_chain || chain_len == 0 || !trust_anchor) {
     return PICOCERT_ERR_INVALID;
   }
 
   // Enforce maximum chain length to prevent DoS attacks
   if (chain_len > PICOCERT_MAX_CHAIN_LEN) {
     return PICOCERT_ERR_CHAIN_TOO_LONG;
+  }
+
+  const picocert_t* root = &cert_chain[chain_len - 1];
+  if (memcmp(root, trust_anchor, sizeof(*root)) != 0) {
+    return PICOCERT_ERR_UNTRUSTED_ROOT;
   }
 
   // Verify each certificate in the chain
@@ -451,7 +460,6 @@ static picocert_err_t picocert_validate_cert_chain(picocert_context_t* ctx,
   }
 
   // Ensure the root certificate is self-signed
-  const picocert_t* root = &cert_chain[chain_len - 1];
   if (!picocert_is_self_signed(root)) {
     return PICOCERT_ERR_NOT_SELF_SIGNED;
   }
@@ -506,6 +514,7 @@ static picocert_err_t __attribute__((unused)) picocert_verify_hash(
  * @param cert_chain  Pointer to an array of certificates (chain), ending with
  * the root certificate
  * @param chain_len   Length of the certificate chain
+ * @param trust_anchor Independently provisioned root certificate to trust
  * @param hash        Pointer to the SHA-256 hash of the data to verify
  * @param signature   Pointer to the signature of the hash
  * @return            PICOCERT_OK if verification is successful and the chain is
@@ -513,13 +522,16 @@ static picocert_err_t __attribute__((unused)) picocert_verify_hash(
  */
 static picocert_err_t __attribute__((unused)) picocert_verify_hash_and_validate_chain(
     picocert_context_t* ctx, const picocert_t* cert_chain,
-    const uint32_t chain_len, const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+    const uint32_t chain_len, const picocert_t* trust_anchor,
+    const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
     const uint8_t signature[PICOCERT_ECC_SIG_SIZE]) {
-  if (!ctx || !cert_chain || chain_len == 0 || !hash || !signature) {
+  if (!ctx || !cert_chain || chain_len == 0 || !trust_anchor || !hash ||
+      !signature) {
     return PICOCERT_ERR_INVALID;
   }
 
-  picocert_err_t err = picocert_validate_cert_chain(ctx, cert_chain, chain_len);
+  picocert_err_t err =
+      picocert_validate_cert_chain(ctx, cert_chain, chain_len, trust_anchor);
   if (err != PICOCERT_OK) {
     return err;
   }

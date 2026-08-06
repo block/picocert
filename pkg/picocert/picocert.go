@@ -43,6 +43,7 @@ var (
 	ErrVersionMismatch = errors.New("version mismatch")
 	ErrReserved        = errors.New("reserved")
 	ErrNotSelfSigned   = errors.New("not self-signed")
+	ErrUntrustedRoot   = errors.New("untrusted root")
 	ErrUnknown         = errors.New("unknown")
 )
 
@@ -270,9 +271,13 @@ func ValidateCert(issuer, subject *Certificate) error {
 	return Verify(issuer, subject.SignableBytes(), subject.Signature[:])
 }
 
-func ValidateCertChain(chain []Certificate) error {
-	if len(chain) == 0 {
+func ValidateCertChain(chain []Certificate, trustAnchor *Certificate) error {
+	if len(chain) == 0 || trustAnchor == nil {
 		return ErrInvalid
+	}
+	root := chain[len(chain)-1]
+	if root != *trustAnchor {
+		return ErrUntrustedRoot
 	}
 	for i := 0; i < len(chain)-1; i++ {
 		err := ValidateCert(&chain[i+1], &chain[i])
@@ -280,18 +285,17 @@ func ValidateCertChain(chain []Certificate) error {
 			return err
 		}
 	}
-	root := chain[len(chain)-1]
 	if !root.IsSelfSigned() {
 		return ErrNotSelfSigned
 	}
 	return ValidateCert(&root, &root)
 }
 
-func VerifyAndValidateChain(chain []Certificate, data, sig []byte) error {
-	if len(chain) == 0 || len(data) == 0 {
+func VerifyAndValidateChain(chain []Certificate, trustAnchor *Certificate, data, sig []byte) error {
+	if len(chain) == 0 || trustAnchor == nil || len(data) == 0 {
 		return ErrInvalid
 	}
-	if err := ValidateCertChain(chain); err != nil {
+	if err := ValidateCertChain(chain, trustAnchor); err != nil {
 		return err
 	}
 	return Verify(&chain[0], data, sig)
