@@ -36,16 +36,17 @@ const (
 )
 
 var (
-	ErrInvalid          = errors.New("invalid")
-	ErrExpired          = errors.New("expired")
-	ErrSignature        = errors.New("signature")
-	ErrIssuerMismatch   = errors.New("issuer mismatch")
-	ErrVersionMismatch  = errors.New("version mismatch")
-	ErrReserved         = errors.New("reserved")
-	ErrNotSelfSigned    = errors.New("not self-signed")
-	ErrUntrustedRoot    = errors.New("untrusted root")
-	ErrUnsupportedCurve = errors.New("unsupported curve")
-	ErrUnknown          = errors.New("unknown")
+	ErrInvalid           = errors.New("invalid")
+	ErrExpired           = errors.New("expired")
+	ErrSignature         = errors.New("signature")
+	ErrIssuerMismatch    = errors.New("issuer mismatch")
+	ErrIssuerKeyMismatch = errors.New("issuer private key does not match issuer certificate")
+	ErrVersionMismatch   = errors.New("version mismatch")
+	ErrReserved          = errors.New("reserved")
+	ErrNotSelfSigned     = errors.New("not self-signed")
+	ErrUntrustedRoot     = errors.New("untrusted root")
+	ErrUnsupportedCurve  = errors.New("unsupported curve")
+	ErrUnknown           = errors.New("unknown")
 )
 
 type Certificate struct {
@@ -137,6 +138,23 @@ func ParseCertificate(data []byte) (*Certificate, error) {
 }
 
 func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64) (*CertificateWithKey, error) {
+	var issuerPrivateKey *ecdsa.PrivateKey
+	if issuer != nil {
+		var err error
+		issuerPrivateKey, err = ParsePrivateKey(issuer.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		issuerPublicKey := elliptic.Marshal(
+			issuerPrivateKey.Curve,
+			issuerPrivateKey.PublicKey.X,
+			issuerPrivateKey.PublicKey.Y,
+		)
+		if !bytes.Equal(issuerPublicKey, issuer.Cert.PubKey[:]) {
+			return nil, ErrIssuerKeyMismatch
+		}
+	}
+
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -162,14 +180,7 @@ func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64
 
 	if issuer != nil {
 		cert.Issuer = issuer.Cert.Subject
-
-		// Parse issuer's private key from PKCS8 format
-		issuerPrivKey, err := ParsePrivateKey(issuer.PrivateKey)
-		if err != nil {
-			return nil, err
-		}
-
-		sig, err := Sign(issuerPrivKey, cert.SignableBytes())
+		sig, err := Sign(issuerPrivateKey, cert.SignableBytes())
 		if err != nil {
 			return nil, err
 		}

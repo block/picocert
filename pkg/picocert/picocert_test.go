@@ -406,3 +406,19 @@ func TestSignRejectsUnsupportedCurves(t *testing.T) {
 		})
 	}
 }
+
+func TestIssueRejectsIssuerKeyMismatch(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	oneYear := uint64(365 * 24 * 60 * 60)
+	issuer, err := picocert.Issue(nil, "issuer", now, now+oneYear)
+	require.NoError(t, err)
+	otherIssuer, err := picocert.Issue(nil, "other-issuer", now, now+oneYear)
+	require.NoError(t, err)
+
+	mismatchedIssuer := &picocert.CertificateWithKey{
+		Cert:       issuer.Cert,
+		PrivateKey: otherIssuer.PrivateKey,
+	}
+	_, err = picocert.Issue(mismatchedIssuer, "leaf", now, now+oneYear)
+	require.ErrorIs(t, err, picocert.ErrIssuerKeyMismatch)
+}
