@@ -458,3 +458,82 @@ func FuzzVerifySignatureLength(f *testing.F) {
 		}
 	})
 }
+
+func TestValidationConformanceRejectsUnsupportedAlgorithms(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		mutate      func(*picocert.Certificate)
+		expectedErr error
+	}{
+		{
+			name: "curve",
+			mutate: func(cert *picocert.Certificate) {
+				cert.Curve = picocert.Curve(1)
+			},
+			expectedErr: picocert.ErrUnsupportedCurve,
+		},
+		{
+			name: "hash",
+			mutate: func(cert *picocert.Certificate) {
+				cert.Hash = picocert.Hash(1)
+			},
+			expectedErr: picocert.ErrUnsupportedHash,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cert := root.Cert
+			test.mutate(&cert)
+			err := picocert.ValidateCert(&cert, &cert)
+			require.ErrorIs(t, err, test.expectedErr)
+		})
+	}
+}
+
+func TestValidationConformanceRejectsInvalidValidityPeriod(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	cert, err := picocert.Issue(nil, "root", now+60, now)
+	require.NoError(t, err)
+
+	err = picocert.ValidateCert(&cert.Cert, &cert.Cert)
+	require.ErrorIs(t, err, picocert.ErrInvalidValidityPeriod)
+}
+
+func TestValidationConformanceRejectsEmbeddedNullNameMismatch(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+	leaf, err := picocert.Issue(root, "leaf", now, now+60)
+	require.NoError(t, err)
+
+	root.Cert.Subject = [picocert.MaxNameLen]byte{'A', 0, 'X'}
+	leaf.Cert.Issuer = [picocert.MaxNameLen]byte{'A', 0, 'Y'}
+	rootKey, err := picocert.ParsePrivateKey(root.PrivateKey)
+	require.NoError(t, err)
+	leafSignature, err := picocert.Sign(rootKey, leaf.Cert.SignableBytes())
+	require.NoError(t, err)
+	copy(leaf.Cert.Signature[:], leafSignature)
+
+	err = picocert.ValidateCert(&root.Cert, &leaf.Cert)
+	require.ErrorIs(t, err, picocert.ErrIssuerMismatch)
+}
+
+func TestValidationConformanceEnforcesChainLength(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+
+	maximumChain := make([]picocert.Certificate, picocert.MaxChainLen)
+	for i := range maximumChain {
+		maximumChain[i] = root.Cert
+	}
+	require.NoError(t, picocert.ValidateCertChain(maximumChain, &root.Cert))
+
+	oversizedChain := append(maximumChain, root.Cert)
+	err = picocert.ValidateCertChain(oversizedChain, &root.Cert)
+	require.ErrorIs(t, err, picocert.ErrChainTooLong)
+}

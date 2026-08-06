@@ -362,8 +362,9 @@ type CertificateWithKey struct {
 
 // Constants
 const (
-    P256 Curve = 0     // ECDSA P-256
-    Sha256 Hash = 0    // SHA-256
+    P256 Curve = 0       // ECDSA P-256
+    Sha256 Hash = 0      // SHA-256
+    MaxChainLen = 10
 )
 ```
 
@@ -376,6 +377,7 @@ const (
 - Signature is raw ECDSA (r||s, 64 bytes).
 - Timestamps are Unix epoch seconds.
 - Certificate data is stored in little-endian format for embedded compatibility.
+- The C and Go validators both accept at most 10 certificates in a chain.
 
 ## File Formats
 

@@ -21,6 +21,7 @@ const (
 	MaxNameLen     = 32
 	MaxPubKeyLen   = 65
 	MaxSigLen      = 64
+	MaxChainLen    = 10
 	CurrentVersion = 1
 )
 
@@ -46,6 +47,9 @@ var (
 	ErrNotSelfSigned          = errors.New("not self-signed")
 	ErrUntrustedRoot          = errors.New("untrusted root")
 	ErrUnsupportedCurve       = errors.New("unsupported curve")
+	ErrUnsupportedHash        = errors.New("unsupported hash")
+	ErrInvalidValidityPeriod  = errors.New("invalid validity period")
+	ErrChainTooLong           = errors.New("certificate chain too long")
 	ErrInvalidSignatureLength = errors.New("invalid signature length")
 	ErrUnknown                = errors.New("unknown")
 )
@@ -296,11 +300,26 @@ func Verify(cert *Certificate, data, sig []byte) error {
 }
 
 func ValidateCert(issuer, subject *Certificate) error {
+	if issuer == nil || subject == nil {
+		return ErrInvalid
+	}
 	if issuer.Version != CurrentVersion || subject.Version != CurrentVersion {
 		return ErrVersionMismatch
 	}
+	if issuer.Curve != P256 || subject.Curve != P256 {
+		return ErrUnsupportedCurve
+	}
+	if issuer.Hash != Sha256 || subject.Hash != Sha256 {
+		return ErrUnsupportedHash
+	}
 	if issuer.Reserved != 0 || subject.Reserved != 0 {
 		return ErrReserved
+	}
+	if issuer.ValidFrom > issuer.ValidTo || subject.ValidFrom > subject.ValidTo {
+		return ErrInvalidValidityPeriod
+	}
+	if err := Verify(issuer, subject.SignableBytes(), subject.Signature[:]); err != nil {
+		return err
 	}
 	if issuer.Subject != subject.Issuer {
 		return ErrIssuerMismatch
@@ -310,12 +329,15 @@ func ValidateCert(issuer, subject *Certificate) error {
 		now < issuer.ValidFrom || now > issuer.ValidTo {
 		return ErrExpired
 	}
-	return Verify(issuer, subject.SignableBytes(), subject.Signature[:])
+	return nil
 }
 
 func ValidateCertChain(chain []Certificate, trustAnchor *Certificate) error {
 	if len(chain) == 0 || trustAnchor == nil {
 		return ErrInvalid
+	}
+	if len(chain) > MaxChainLen {
+		return ErrChainTooLong
 	}
 	root := chain[len(chain)-1]
 	if root != *trustAnchor {

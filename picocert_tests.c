@@ -173,6 +173,17 @@ bool openssl_ecc_verify(const uint8_t* key, size_t key_size,
   return (result == 1);
 }
 
+bool accept_all_ecc_signatures(const uint8_t* key, size_t key_size,
+                               const uint8_t* hash, uint32_t hash_len,
+                               const uint8_t* signature) {
+  (void)key;
+  (void)key_size;
+  (void)hash;
+  (void)hash_len;
+  (void)signature;
+  return true;
+}
+
 // Helper function to initialize picocert context for testing with OpenSSL
 picocert_err_t init_picocert_context_for_testing(picocert_context_t* ctx) {
   return picocert_init_context(ctx, openssl_sha256_hash, openssl_ecc_verify,
@@ -650,6 +661,38 @@ int test_self_signed_detection(void) {
               "Should detect self-signed cert");
   TEST_ASSERT(!picocert_is_self_signed(&not_self_signed),
               "Should detect non-self-signed cert");
+
+  picocert_t embedded_null_names = {0};
+  embedded_null_names.issuer[0] = 'A';
+  embedded_null_names.issuer[2] = 'X';
+  embedded_null_names.subject[0] = 'A';
+  embedded_null_names.subject[2] = 'Y';
+  TEST_ASSERT(!picocert_is_self_signed(&embedded_null_names),
+              "Bytes after an embedded NUL must be compared");
+
+  TEST_PASS();
+}
+
+int test_fixed_width_name_validation(void) {
+  picocert_context_t ctx = {0};
+  picocert_err_t err = picocert_init_context(
+      &ctx, openssl_sha256_hash, accept_all_ecc_signatures, mock_time_callback);
+  TEST_ASSERT(err == PICOCERT_OK, "Context initialization should succeed");
+
+  picocert_t issuer = create_test_cert(
+      "issuer", "issuer", mock_current_time - 1000, mock_current_time + 1000);
+  picocert_t subject = create_test_cert(
+      "issuer", "subject", mock_current_time - 1000, mock_current_time + 1000);
+  memset(issuer.subject, 0, sizeof(issuer.subject));
+  memset(subject.issuer, 0, sizeof(subject.issuer));
+  issuer.subject[0] = 'A';
+  issuer.subject[2] = 'X';
+  subject.issuer[0] = 'A';
+  subject.issuer[2] = 'Y';
+
+  err = picocert_validate_cert(&ctx, &issuer, &subject);
+  TEST_ASSERT(err == PICOCERT_ERR_ISSUER,
+              "Issuer names must differ when bytes after a NUL differ");
 
   TEST_PASS();
 }
@@ -1232,6 +1275,7 @@ int main(void) {
       test_key_extraction,
       test_certificate_structure,
       test_self_signed_detection,
+      test_fixed_width_name_validation,
       test_time_callback,
       test_certificate_time_validation,
       test_hash_verification,

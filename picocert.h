@@ -236,7 +236,7 @@ static picocert_err_t picocert_current_time(const picocert_context_t* ctx,
 }
 
 static bool picocert_is_self_signed(const picocert_t* cert) {
-  return (strncmp(cert->issuer, cert->subject, PICOCERT_MAX_NAME_LEN) == 0);
+  return (memcmp(cert->issuer, cert->subject, PICOCERT_MAX_NAME_LEN) == 0);
 }
 
 // =============================================================================
@@ -388,7 +388,7 @@ static picocert_err_t picocert_validate_cert(picocert_context_t* ctx,
   }
 
   // Ensure the names match
-  if (strncmp(issuer->subject, subject->issuer, PICOCERT_MAX_NAME_LEN) != 0) {
+  if (memcmp(issuer->subject, subject->issuer, PICOCERT_MAX_NAME_LEN) != 0) {
     return PICOCERT_ERR_ISSUER;
   }
 
