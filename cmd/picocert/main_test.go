@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/block/picocert/pkg/picocert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,4 +60,135 @@ func TestSignCommandAcceptsExistingPrivateKeyPermissions(t *testing.T) {
 		"--binary", binaryPath,
 	})
 	require.NoError(t, err)
+}
+
+func TestVerifyCommandValidatesChainAgainstTrustedRoot(t *testing.T) {
+	dir := t.TempDir()
+	now := uint64(time.Now().Unix())
+	oneYear := uint64(365 * 24 * 60 * 60)
+
+	root, err := picocert.Issue(nil, "root", now, now+oneYear)
+	require.NoError(t, err)
+	intermediate, err := picocert.Issue(root, "intermediate", now, now+oneYear)
+	require.NoError(t, err)
+	leaf, err := picocert.Issue(intermediate, "leaf", now, now+oneYear)
+	require.NoError(t, err)
+
+	data := []byte("firmware")
+	leafKey, err := picocert.ParsePrivateKey(leaf.PrivateKey)
+	require.NoError(t, err)
+	signature, err := picocert.Sign(leafKey, data)
+	require.NoError(t, err)
+
+	paths := writeVerificationFixture(t, dir, root, intermediate, leaf, data, signature)
+	err = newApp().Run([]string{
+		"picocert", "--quiet", "verify",
+		"--cert", paths.leaf,
+		"--intermediate", paths.intermediate,
+		"--root", paths.root,
+		"--binary", paths.binary,
+		"--signature", paths.signature,
+	})
+	require.NoError(t, err)
+}
+
+func TestVerifyCommandRequiresTrustedRoot(t *testing.T) {
+	err := newApp().Run([]string{
+		"picocert", "verify",
+		"--cert", "leaf.pct",
+		"--binary", "firmware.bin",
+		"--signature", "firmware.sig",
+	})
+	require.ErrorContains(t, err, "root")
+}
+
+func TestVerifyCommandRejectsUntrustedRoot(t *testing.T) {
+	dir := t.TempDir()
+	now := uint64(time.Now().Unix())
+	oneYear := uint64(365 * 24 * 60 * 60)
+
+	root, err := picocert.Issue(nil, "root", now, now+oneYear)
+	require.NoError(t, err)
+	leaf, err := picocert.Issue(root, "leaf", now, now+oneYear)
+	require.NoError(t, err)
+	untrustedRoot, err := picocert.Issue(nil, "untrusted", now, now+oneYear)
+	require.NoError(t, err)
+
+	data := []byte("firmware")
+	leafKey, err := picocert.ParsePrivateKey(leaf.PrivateKey)
+	require.NoError(t, err)
+	signature, err := picocert.Sign(leafKey, data)
+	require.NoError(t, err)
+
+	paths := writeVerificationFixture(t, dir, untrustedRoot, nil, leaf, data, signature)
+	err = newApp().Run([]string{
+		"picocert", "--quiet", "verify",
+		"--cert", paths.leaf,
+		"--root", paths.root,
+		"--binary", paths.binary,
+		"--signature", paths.signature,
+	})
+	require.Error(t, err)
+}
+
+func TestVerifyCommandRejectsExpiredCertificate(t *testing.T) {
+	dir := t.TempDir()
+	now := uint64(time.Now().Unix())
+	oneYear := uint64(365 * 24 * 60 * 60)
+
+	root, err := picocert.Issue(nil, "root", now-oneYear, now+oneYear)
+	require.NoError(t, err)
+	leaf, err := picocert.Issue(root, "leaf", now-48*60*60, now-24*60*60)
+	require.NoError(t, err)
+
+	data := []byte("firmware")
+	leafKey, err := picocert.ParsePrivateKey(leaf.PrivateKey)
+	require.NoError(t, err)
+	signature, err := picocert.Sign(leafKey, data)
+	require.NoError(t, err)
+
+	paths := writeVerificationFixture(t, dir, root, nil, leaf, data, signature)
+	err = newApp().Run([]string{
+		"picocert", "--quiet", "verify",
+		"--cert", paths.leaf,
+		"--root", paths.root,
+		"--binary", paths.binary,
+		"--signature", paths.signature,
+	})
+	require.ErrorIs(t, err, picocert.ErrExpired)
+}
+
+type verificationFixture struct {
+	root         string
+	intermediate string
+	leaf         string
+	binary       string
+	signature    string
+}
+
+func writeVerificationFixture(
+	t *testing.T,
+	dir string,
+	root *picocert.CertificateWithKey,
+	intermediate *picocert.CertificateWithKey,
+	leaf *picocert.CertificateWithKey,
+	data, signature []byte,
+) verificationFixture {
+	t.Helper()
+
+	fixture := verificationFixture{
+		root:      filepath.Join(dir, "root.pct"),
+		leaf:      filepath.Join(dir, "leaf.pct"),
+		binary:    filepath.Join(dir, "firmware.bin"),
+		signature: filepath.Join(dir, "firmware.sig"),
+	}
+	require.NoError(t, os.WriteFile(fixture.root, root.Cert.ToBytes(), 0644))
+	require.NoError(t, os.WriteFile(fixture.leaf, leaf.Cert.ToBytes(), 0644))
+	require.NoError(t, os.WriteFile(fixture.binary, data, 0644))
+	require.NoError(t, os.WriteFile(fixture.signature, signature, 0644))
+	if intermediate != nil {
+		fixture.intermediate = filepath.Join(dir, "intermediate.pct")
+		require.NoError(t, os.WriteFile(fixture.intermediate, intermediate.Cert.ToBytes(), 0644))
+	}
+	return fixture
 }

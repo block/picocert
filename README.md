@@ -186,9 +186,17 @@ picocert sign --key private.priv.der --binary firmware.bin
 #### Verify Signatures
 
 ```bash
-# Verify a signed binary
-picocert verify --cert certificate.pct --binary firmware.bin --signature firmware.sig
+# Verify a signed binary and its certificate chain against a pinned root
+picocert verify --cert firmware-leaf.pct \
+  --intermediate firmware-intermediate.pct \
+  --root /trusted/firmware-root.pct \
+  --binary firmware.bin --signature firmware.sig
 ```
+
+Pass `--intermediate` more than once for deeper chains, ordered from the leaf's
+issuer toward the root. The `--root` file must come from trusted storage rather
+than from the same untrusted source as the binary and certificate chain. The CLI
+checks every certificate's validity period as part of verification.
 
 ### Global Flags
 
@@ -282,6 +290,11 @@ if err != nil {
     // Verification failed
 }
 ```
+
+`Verify` only checks that the supplied certificate's public key produced the
+signature. It does not authenticate that certificate or check its validity
+period. Use `VerifyAndValidateChain` with an independently provisioned root for
+authentication.
 
 #### Certificate Chain Validation
 

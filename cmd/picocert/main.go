@@ -12,7 +12,13 @@ import (
 )
 
 func main() {
-	app := &cli.App{
+	if err := newApp().Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func newApp() *cli.App {
+	return &cli.App{
 		Name:  "picocert",
 		Usage: "Manage certificates",
 		Flags: []cli.Flag{
@@ -81,7 +87,16 @@ func main() {
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "cert",
-						Usage:    "Path to the certificate file",
+						Usage:    "Path to the leaf certificate file",
+						Required: true,
+					},
+					&cli.StringSliceFlag{
+						Name:  "intermediate",
+						Usage: "Path to an intermediate certificate; repeat in leaf-to-root order",
+					},
+					&cli.StringFlag{
+						Name:     "root",
+						Usage:    "Path to the independently trusted root certificate",
 						Required: true,
 					},
 					&cli.StringFlag{
@@ -111,10 +126,6 @@ func main() {
 				Action: printCertificate,
 			},
 		},
-	}
-
-	if err := app.Run(os.Args); err != nil {
-		log.Fatal(err)
 	}
 }
 
@@ -258,6 +269,8 @@ func writeNewFile(path string, data []byte, mode os.FileMode) error {
 
 func verifyBinary(c *cli.Context) error {
 	certPath := c.String("cert")
+	intermediatePaths := c.StringSlice("intermediate")
+	rootPath := c.String("root")
 	binaryPath := c.String("binary")
 	signaturePath := c.String("signature")
 
@@ -269,6 +282,31 @@ func verifyBinary(c *cli.Context) error {
 	cert, err := picocert.ParseCertificate(certBytes)
 	if err != nil {
 		return fmt.Errorf("unable to parse certificate: %w", err)
+	}
+	chain := []picocert.Certificate{*cert}
+
+	for _, path := range intermediatePaths {
+		intermediateBytes, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("unable to read intermediate certificate %q: %w", path, err)
+		}
+		intermediate, err := picocert.ParseCertificate(intermediateBytes)
+		if err != nil {
+			return fmt.Errorf("unable to parse intermediate certificate %q: %w", path, err)
+		}
+		chain = append(chain, *intermediate)
+	}
+
+	rootBytes, err := os.ReadFile(rootPath)
+	if err != nil {
+		return fmt.Errorf("unable to read trusted root certificate: %w", err)
+	}
+	root, err := picocert.ParseCertificate(rootBytes)
+	if err != nil {
+		return fmt.Errorf("unable to parse trusted root certificate: %w", err)
+	}
+	if chain[len(chain)-1] != *root {
+		chain = append(chain, *root)
 	}
 
 	// Read the binary file
@@ -284,11 +322,10 @@ func verifyBinary(c *cli.Context) error {
 		return fmt.Errorf("unable to read signature file: %w", err)
 	}
 
-	// Verify the signature
-	if err := picocert.Verify(cert, binaryData, signatureData); err != nil {
-		return fmt.Errorf("signature verification failed: %w", err)
+	if err := picocert.VerifyAndValidateChain(chain, root, binaryData, signatureData); err != nil {
+		return fmt.Errorf("signature and certificate chain verification failed: %w", err)
 	}
-	fmt.Println("Signature verification succeeded.")
+	printOutput(c, "Signature and certificate chain verification succeeded.\n")
 
 	return nil
 }
