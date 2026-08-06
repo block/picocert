@@ -1,6 +1,10 @@
 package picocert_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"testing"
 	"time"
 
@@ -358,4 +362,47 @@ func TestValidateCertChainRequiresTrustAnchor(t *testing.T) {
 
 	err = picocert.ValidateCertChain([]picocert.Certificate{root.Cert}, nil)
 	require.ErrorIs(t, err, picocert.ErrInvalid)
+}
+
+func TestParsePrivateKeyRejectsUnsupportedCurves(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{name: "P-224", curve: elliptic.P224()},
+		{name: "P-384", curve: elliptic.P384()},
+		{name: "P-521", curve: elliptic.P521()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			privateKey, err := ecdsa.GenerateKey(test.curve, rand.Reader)
+			require.NoError(t, err)
+			_, err = picocert.EncodePrivateKeyToPKCS8(privateKey)
+			require.ErrorIs(t, err, picocert.ErrUnsupportedCurve)
+
+			encoded, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			require.NoError(t, err)
+
+			_, err = picocert.ParsePrivateKey(encoded)
+			require.ErrorIs(t, err, picocert.ErrUnsupportedCurve)
+		})
+	}
+}
+
+func TestSignRejectsUnsupportedCurves(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{name: "P-224", curve: elliptic.P224()},
+		{name: "P-384", curve: elliptic.P384()},
+		{name: "P-521", curve: elliptic.P521()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			privateKey, err := ecdsa.GenerateKey(test.curve, rand.Reader)
+			require.NoError(t, err)
+
+			_, err = picocert.Sign(privateKey, []byte("data"))
+			require.ErrorIs(t, err, picocert.ErrUnsupportedCurve)
+		})
+	}
 }

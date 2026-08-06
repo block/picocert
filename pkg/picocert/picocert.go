@@ -36,15 +36,16 @@ const (
 )
 
 var (
-	ErrInvalid         = errors.New("invalid")
-	ErrExpired         = errors.New("expired")
-	ErrSignature       = errors.New("signature")
-	ErrIssuerMismatch  = errors.New("issuer mismatch")
-	ErrVersionMismatch = errors.New("version mismatch")
-	ErrReserved        = errors.New("reserved")
-	ErrNotSelfSigned   = errors.New("not self-signed")
-	ErrUntrustedRoot   = errors.New("untrusted root")
-	ErrUnknown         = errors.New("unknown")
+	ErrInvalid          = errors.New("invalid")
+	ErrExpired          = errors.New("expired")
+	ErrSignature        = errors.New("signature")
+	ErrIssuerMismatch   = errors.New("issuer mismatch")
+	ErrVersionMismatch  = errors.New("version mismatch")
+	ErrReserved         = errors.New("reserved")
+	ErrNotSelfSigned    = errors.New("not self-signed")
+	ErrUntrustedRoot    = errors.New("untrusted root")
+	ErrUnsupportedCurve = errors.New("unsupported curve")
+	ErrUnknown          = errors.New("unknown")
 )
 
 type Certificate struct {
@@ -193,6 +194,9 @@ func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64
 
 // EncodePrivateKeyToPKCS8 encodes a private key to PKCS8 format
 func EncodePrivateKeyToPKCS8(privateKey *ecdsa.PrivateKey) ([]byte, error) {
+	if err := validatePrivateKey(privateKey); err != nil {
+		return nil, err
+	}
 	return x509.MarshalPKCS8PrivateKey(privateKey)
 }
 
@@ -208,11 +212,17 @@ func ParsePrivateKey(pkcs8Key []byte) (*ecdsa.PrivateKey, error) {
 	if !ok {
 		return nil, errors.New("not an ECDSA private key")
 	}
+	if err := validatePrivateKey(ecdsaKey); err != nil {
+		return nil, err
+	}
 
 	return ecdsaKey, nil
 }
 
 func Sign(priv *ecdsa.PrivateKey, data []byte) ([]byte, error) {
+	if err := validatePrivateKey(priv); err != nil {
+		return nil, err
+	}
 	hash := sha256.Sum256(data)
 	r, s, err := ecdsa.Sign(rand.Reader, priv, hash[:])
 	if err != nil {
@@ -221,10 +231,24 @@ func Sign(priv *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 	// Fixed length
 	rb := r.Bytes()
 	sb := s.Bytes()
+	componentLen := MaxSigLen / 2
+	if len(rb) > componentLen || len(sb) > componentLen {
+		return nil, errors.New("signature component exceeds P-256 width")
+	}
 	sig := make([]byte, MaxSigLen)
-	copy(sig[32-len(rb):32], rb)
-	copy(sig[64-len(sb):64], sb)
+	copy(sig[componentLen-len(rb):componentLen], rb)
+	copy(sig[MaxSigLen-len(sb):], sb)
 	return sig, nil
+}
+
+func validatePrivateKey(privateKey *ecdsa.PrivateKey) error {
+	if privateKey == nil {
+		return ErrInvalid
+	}
+	if privateKey.Curve != elliptic.P256() {
+		return fmt.Errorf("%w: picocert requires ECDSA P-256", ErrUnsupportedCurve)
+	}
+	return nil
 }
 
 func Verify(cert *Certificate, data, sig []byte) error {
