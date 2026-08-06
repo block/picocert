@@ -362,12 +362,14 @@ const (
 ## File Formats
 
 - **Certificates**: Binary format (`.pct` extension), 184 bytes each
-- **Private Keys**: PKCS#8 DER format (`.priv.der` extension)
+- **Private Keys**: Unencrypted PKCS#8 DER format (`.priv.der` extension), created
+  with owner-only permissions (`0600`)
 - **Signatures**: Raw binary, 64 bytes (r||s format)
 
 ## Security Considerations
 
-- Private keys should be stored securely and never transmitted in plaintext
+- Private keys are not encrypted. Store them securely and never transmit them in
+  plaintext.
 - Consider using hardware security modules (HSMs) for root CA key storage
 - Implement proper key rotation and certificate renewal procedures
 - Provision trust anchors independently from untrusted certificate chains, and

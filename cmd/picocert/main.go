@@ -171,15 +171,11 @@ func issueCertificate(c *cli.Context) error {
 	certPath := fmt.Sprintf("%s.pct", subject)
 	keyPath := fmt.Sprintf("%s.priv.der", subject)
 
-	if err := os.WriteFile(certPath, issued.Cert.ToBytes(), 0644); err != nil {
-		return fmt.Errorf("unable to write certificate: %w", err)
+	if err := writeCertificateAndKey(certPath, keyPath, issued.Cert.ToBytes(), issued.PrivateKey); err != nil {
+		return err
 	}
 
-	if err := os.WriteFile(keyPath, issued.PrivateKey, 0644); err != nil {
-		return fmt.Errorf("unable to write private key: %w", err)
-	}
-
-	printOutput(c, "New certificate issued.\nCert: %s\nPrivate key: %s\n", certPath, keyPath)
+	printOutput(c, "New certificate issued.\nCert: %s\nPrivate key: %s\nWarning: the private key is unencrypted; store it securely.\n", certPath, keyPath)
 	return nil
 }
 
@@ -224,6 +220,39 @@ func signBinary(c *cli.Context) error {
 	}
 	printOutput(c, "Signature file created successfully: %s\n", outoutPath)
 
+	return nil
+}
+
+func writeCertificateAndKey(certPath, keyPath string, certData, keyData []byte) error {
+	if err := writeNewFile(certPath, certData, 0644); err != nil {
+		return fmt.Errorf("unable to create certificate: %w", err)
+	}
+	if err := writeNewFile(keyPath, keyData, 0600); err != nil {
+		if removeErr := os.Remove(certPath); removeErr != nil {
+			return fmt.Errorf("unable to create private key: %w (also unable to remove incomplete certificate: %v)", err, removeErr)
+		}
+		return fmt.Errorf("unable to create private key: %w", err)
+	}
+	return nil
+}
+
+func writeNewFile(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		if removeErr := os.Remove(path); removeErr != nil {
+			return fmt.Errorf("write failed: %w (also unable to remove incomplete file: %v)", writeErr, removeErr)
+		}
+		return writeErr
+	}
 	return nil
 }
 
