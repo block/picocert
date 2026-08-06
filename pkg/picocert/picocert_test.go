@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"fmt"
 	"testing"
 	"time"
 
@@ -421,4 +422,39 @@ func TestIssueRejectsIssuerKeyMismatch(t *testing.T) {
 	}
 	_, err = picocert.Issue(mismatchedIssuer, "leaf", now, now+oneYear)
 	require.ErrorIs(t, err, picocert.ErrIssuerKeyMismatch)
+}
+
+func TestVerifyRejectsMalformedSignatureLengths(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	cert, err := picocert.Issue(nil, "signer", now, now+60)
+	require.NoError(t, err)
+
+	for _, length := range []int{0, 1, 31, 32, 63, 65, 128} {
+		t.Run(fmt.Sprintf("length-%d", length), func(t *testing.T) {
+			var verifyErr error
+			require.NotPanics(t, func() {
+				verifyErr = picocert.Verify(&cert.Cert, []byte("data"), make([]byte, length))
+			})
+			require.ErrorIs(t, verifyErr, picocert.ErrInvalidSignatureLength)
+		})
+	}
+}
+
+func FuzzVerifySignatureLength(f *testing.F) {
+	now := uint64(time.Now().Unix())
+	cert, err := picocert.Issue(nil, "signer", now, now+60)
+	if err != nil {
+		f.Fatal(err)
+	}
+
+	f.Add([]byte{})
+	f.Add(make([]byte, picocert.MaxSigLen-1))
+	f.Add(make([]byte, picocert.MaxSigLen))
+	f.Add(make([]byte, picocert.MaxSigLen+1))
+	f.Fuzz(func(t *testing.T, signature []byte) {
+		err := picocert.Verify(&cert.Cert, []byte("data"), signature)
+		if len(signature) != picocert.MaxSigLen {
+			require.ErrorIs(t, err, picocert.ErrInvalidSignatureLength)
+		}
+	})
 }

@@ -36,17 +36,18 @@ const (
 )
 
 var (
-	ErrInvalid           = errors.New("invalid")
-	ErrExpired           = errors.New("expired")
-	ErrSignature         = errors.New("signature")
-	ErrIssuerMismatch    = errors.New("issuer mismatch")
-	ErrIssuerKeyMismatch = errors.New("issuer private key does not match issuer certificate")
-	ErrVersionMismatch   = errors.New("version mismatch")
-	ErrReserved          = errors.New("reserved")
-	ErrNotSelfSigned     = errors.New("not self-signed")
-	ErrUntrustedRoot     = errors.New("untrusted root")
-	ErrUnsupportedCurve  = errors.New("unsupported curve")
-	ErrUnknown           = errors.New("unknown")
+	ErrInvalid                = errors.New("invalid")
+	ErrExpired                = errors.New("expired")
+	ErrSignature              = errors.New("signature")
+	ErrIssuerMismatch         = errors.New("issuer mismatch")
+	ErrIssuerKeyMismatch      = errors.New("issuer private key does not match issuer certificate")
+	ErrVersionMismatch        = errors.New("version mismatch")
+	ErrReserved               = errors.New("reserved")
+	ErrNotSelfSigned          = errors.New("not self-signed")
+	ErrUntrustedRoot          = errors.New("untrusted root")
+	ErrUnsupportedCurve       = errors.New("unsupported curve")
+	ErrInvalidSignatureLength = errors.New("invalid signature length")
+	ErrUnknown                = errors.New("unknown")
 )
 
 type Certificate struct {
@@ -263,6 +264,12 @@ func validatePrivateKey(privateKey *ecdsa.PrivateKey) error {
 }
 
 func Verify(cert *Certificate, data, sig []byte) error {
+	if cert == nil {
+		return ErrInvalid
+	}
+	if len(sig) != MaxSigLen {
+		return fmt.Errorf("%w: got %d bytes, want %d", ErrInvalidSignatureLength, len(sig), MaxSigLen)
+	}
 	hash := sha256.Sum256(data)
 
 	// Use ecdh.P256 to parse the public key bytes
