@@ -62,6 +62,29 @@ func TestSignCommandAcceptsExistingPrivateKeyPermissions(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestIssueCommandSeparatesSubjectFromOutputPath(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "device-files")
+	subject := "devices/device-subject"
+
+	err := newApp().Run([]string{
+		"picocert", "--quiet", "issue",
+		"--self_signed",
+		"--subject", subject,
+		"--output", output,
+		"--validity_in_days", "1",
+	})
+	require.NoError(t, err)
+
+	certBytes, err := os.ReadFile(output + ".pct")
+	require.NoError(t, err)
+	cert, err := picocert.ParseCertificate(certBytes)
+	require.NoError(t, err)
+	require.Equal(t, subject, string(cert.Subject[:len(subject)]))
+	_, err = os.Stat(output + ".priv.der")
+	require.NoError(t, err)
+}
+
 func TestVerifyCommandValidatesChainAgainstTrustedRoot(t *testing.T) {
 	dir := t.TempDir()
 	now := uint64(time.Now().Unix())

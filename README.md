@@ -166,12 +166,17 @@ go build -o picocert
 
 ```bash
 # Create a self-signed root certificate
-picocert issue --subject "MyRoot" --validity_in_days 3650 --self_signed
+picocert issue --subject "MyRoot" --output my-root \
+  --validity_in_days 3650 --self_signed
 
 # Create a certificate signed by an issuer
-picocert issue --subject "MyLeaf" --validity_in_days 365 \
-  --issuer root.pct --issuer_key root.priv.der
+picocert issue --subject "MyLeaf" --output my-leaf --validity_in_days 365 \
+  --issuer my-root.pct --issuer_key my-root.priv.der
 ```
+
+`--subject` is certificate metadata. `--output` is the filesystem path prefix;
+the command creates `<output>.pct` and
+`<output>.priv.der` without replacing existing files.
 
 #### Sign Binary Files
 
@@ -211,9 +216,9 @@ Use the included script to set up a PKI hierarchy:
 ./three-tier-pki.sh ./cmd/picocert/picocert firmware
 
 # This creates:
-# - firmware-root.pct/priv.der (Root CA, 10-year validity)
-# - firmware-intermediate.pct/priv.der (Intermediate CA, 6-year validity)
-# - firmware-leaf.pct/priv.der (Leaf certificate, 4-year validity)
+# - firmware-root.pct and firmware-root.priv.der (Root CA, 10-year validity)
+# - firmware-intermediate.pct and firmware-intermediate.priv.der (Intermediate CA, 6-year validity)
+# - firmware-leaf.pct and firmware-leaf.priv.der (Leaf certificate, 4-year validity)
 ```
 
 **⚠️ Warning**: The script uses long validity periods. Consider your own needs for production use.

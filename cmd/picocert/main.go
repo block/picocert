@@ -50,6 +50,11 @@ func newApp() *cli.App {
 						Usage:    "Subject name",
 						Required: true,
 					},
+					&cli.StringFlag{
+						Name:     "output",
+						Usage:    "Output path prefix for the certificate and private key",
+						Required: true,
+					},
 					&cli.Uint64Flag{
 						Name:     "validity_in_days",
 						Usage:    "Validity period in days",
@@ -141,6 +146,7 @@ func issueCertificate(c *cli.Context) error {
 	issuerPath := c.String("issuer")
 	issuerKeyPath := c.String("issuer_key")
 	subject := c.String("subject")
+	outputPath := c.String("output")
 	validityDays := c.Uint64("validity_in_days")
 
 	if selfSigned && issuerPath != "" {
@@ -179,8 +185,8 @@ func issueCertificate(c *cli.Context) error {
 		return fmt.Errorf("failed to issue certificate: %w", err)
 	}
 
-	certPath := fmt.Sprintf("%s.pct", subject)
-	keyPath := fmt.Sprintf("%s.priv.der", subject)
+	certPath := outputPath + ".pct"
+	keyPath := outputPath + ".priv.der"
 
 	if err := writeCertificateAndKey(certPath, keyPath, issued.Cert.ToBytes(), issued.PrivateKey); err != nil {
 		return err
