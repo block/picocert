@@ -12,7 +12,13 @@ import (
 )
 
 func main() {
-	app := &cli.App{
+	if err := newApp().Run(os.Args); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func newApp() *cli.App {
+	return &cli.App{
 		Name:  "picocert",
 		Usage: "Manage certificates",
 		Flags: []cli.Flag{
@@ -42,6 +48,11 @@ func main() {
 					&cli.StringFlag{
 						Name:     "subject",
 						Usage:    "Subject name",
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "output",
+						Usage:    "Output path prefix for the certificate and private key",
 						Required: true,
 					},
 					&cli.Uint64Flag{
@@ -81,7 +92,16 @@ func main() {
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "cert",
-						Usage:    "Path to the certificate file",
+						Usage:    "Path to the leaf certificate file",
+						Required: true,
+					},
+					&cli.StringSliceFlag{
+						Name:  "intermediate",
+						Usage: "Path to an intermediate certificate; repeat in leaf-to-root order",
+					},
+					&cli.StringFlag{
+						Name:     "root",
+						Usage:    "Path to the independently trusted root certificate",
 						Required: true,
 					},
 					&cli.StringFlag{
@@ -112,10 +132,6 @@ func main() {
 			},
 		},
 	}
-
-	if err := app.Run(os.Args); err != nil {
-		log.Fatal(err)
-	}
 }
 
 // Helper function to print output only if quiet mode is not enabled
@@ -130,6 +146,7 @@ func issueCertificate(c *cli.Context) error {
 	issuerPath := c.String("issuer")
 	issuerKeyPath := c.String("issuer_key")
 	subject := c.String("subject")
+	outputPath := c.String("output")
 	validityDays := c.Uint64("validity_in_days")
 
 	if selfSigned && issuerPath != "" {
@@ -168,18 +185,14 @@ func issueCertificate(c *cli.Context) error {
 		return fmt.Errorf("failed to issue certificate: %w", err)
 	}
 
-	certPath := fmt.Sprintf("%s.pct", subject)
-	keyPath := fmt.Sprintf("%s.priv.der", subject)
+	certPath := outputPath + ".pct"
+	keyPath := outputPath + ".priv.der"
 
-	if err := os.WriteFile(certPath, issued.Cert.ToBytes(), 0644); err != nil {
-		return fmt.Errorf("unable to write certificate: %w", err)
+	if err := writeCertificateAndKey(certPath, keyPath, issued.Cert.ToBytes(), issued.PrivateKey); err != nil {
+		return err
 	}
 
-	if err := os.WriteFile(keyPath, issued.PrivateKey, 0644); err != nil {
-		return fmt.Errorf("unable to write private key: %w", err)
-	}
-
-	printOutput(c, "New certificate issued.\nCert: %s\nPrivate key: %s\n", certPath, keyPath)
+	printOutput(c, "New certificate issued.\nCert: %s\nPrivate key: %s\nWarning: the private key is unencrypted; store it securely.\n", certPath, keyPath)
 	return nil
 }
 
@@ -227,8 +240,43 @@ func signBinary(c *cli.Context) error {
 	return nil
 }
 
+func writeCertificateAndKey(certPath, keyPath string, certData, keyData []byte) error {
+	if err := writeNewFile(certPath, certData, 0644); err != nil {
+		return fmt.Errorf("unable to create certificate: %w", err)
+	}
+	if err := writeNewFile(keyPath, keyData, 0600); err != nil {
+		if removeErr := os.Remove(certPath); removeErr != nil {
+			return fmt.Errorf("unable to create private key: %w (also unable to remove incomplete certificate: %v)", err, removeErr)
+		}
+		return fmt.Errorf("unable to create private key: %w", err)
+	}
+	return nil
+}
+
+func writeNewFile(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		if removeErr := os.Remove(path); removeErr != nil {
+			return fmt.Errorf("write failed: %w (also unable to remove incomplete file: %v)", writeErr, removeErr)
+		}
+		return writeErr
+	}
+	return nil
+}
+
 func verifyBinary(c *cli.Context) error {
 	certPath := c.String("cert")
+	intermediatePaths := c.StringSlice("intermediate")
+	rootPath := c.String("root")
 	binaryPath := c.String("binary")
 	signaturePath := c.String("signature")
 
@@ -240,6 +288,31 @@ func verifyBinary(c *cli.Context) error {
 	cert, err := picocert.ParseCertificate(certBytes)
 	if err != nil {
 		return fmt.Errorf("unable to parse certificate: %w", err)
+	}
+	chain := []picocert.Certificate{*cert}
+
+	for _, path := range intermediatePaths {
+		intermediateBytes, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("unable to read intermediate certificate %q: %w", path, err)
+		}
+		intermediate, err := picocert.ParseCertificate(intermediateBytes)
+		if err != nil {
+			return fmt.Errorf("unable to parse intermediate certificate %q: %w", path, err)
+		}
+		chain = append(chain, *intermediate)
+	}
+
+	rootBytes, err := os.ReadFile(rootPath)
+	if err != nil {
+		return fmt.Errorf("unable to read trusted root certificate: %w", err)
+	}
+	root, err := picocert.ParseCertificate(rootBytes)
+	if err != nil {
+		return fmt.Errorf("unable to parse trusted root certificate: %w", err)
+	}
+	if chain[len(chain)-1] != *root {
+		chain = append(chain, *root)
 	}
 
 	// Read the binary file
@@ -255,11 +328,10 @@ func verifyBinary(c *cli.Context) error {
 		return fmt.Errorf("unable to read signature file: %w", err)
 	}
 
-	// Verify the signature
-	if err := picocert.Verify(cert, binaryData, signatureData); err != nil {
-		return fmt.Errorf("signature verification failed: %w", err)
+	if err := picocert.VerifyAndValidateChain(chain, root, binaryData, signatureData); err != nil {
+		return fmt.Errorf("signature and certificate chain verification failed: %w", err)
 	}
-	fmt.Println("Signature verification succeeded.")
+	printOutput(c, "Signature and certificate chain verification succeeded.\n")
 
 	return nil
 }

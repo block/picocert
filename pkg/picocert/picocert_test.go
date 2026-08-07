@@ -1,6 +1,11 @@
 package picocert_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,7 +35,7 @@ func TestIssueSelfSignedCert(t *testing.T) {
 	err = picocert.Verify(&certWithKey.Cert, data, sig)
 	require.NoError(t, err)
 
-	err = picocert.VerifyAndValidateChain([]picocert.Certificate{certWithKey.Cert}, data, sig)
+	err = picocert.VerifyAndValidateChain([]picocert.Certificate{certWithKey.Cert}, &certWithKey.Cert, data, sig)
 	require.NoError(t, err)
 }
 
@@ -63,7 +68,7 @@ func TestIssueCertChain(t *testing.T) {
 
 	// Create proper certificate chain
 	chain := []picocert.Certificate{leafCert.Cert, interCert.Cert, rootCert.Cert}
-	err = picocert.ValidateCertChain(chain)
+	err = picocert.ValidateCertChain(chain, &rootCert.Cert)
 	require.NoError(t, err)
 }
 
@@ -85,7 +90,7 @@ func TestInvalidSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	tampered := []byte("tampered data")
-	err = picocert.VerifyAndValidateChain([]picocert.Certificate{certWithKey.Cert}, tampered, sig)
+	err = picocert.VerifyAndValidateChain([]picocert.Certificate{certWithKey.Cert}, &certWithKey.Cert, tampered, sig)
 	require.Error(t, err)
 }
 
@@ -97,7 +102,7 @@ func TestExpiredCert(t *testing.T) {
 	certWithKey, err := picocert.Issue(nil, subject, validFrom, validTo)
 	require.NoError(t, err)
 
-	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert})
+	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert}, &certWithKey.Cert)
 	require.ErrorIs(t, err, picocert.ErrExpired)
 }
 
@@ -112,7 +117,7 @@ func TestNotSelfSignedRoot(t *testing.T) {
 	// Tamper with issuer
 	copy(certWithKey.Cert.Issuer[:], []byte("notroot"))
 
-	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert})
+	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert}, &certWithKey.Cert)
 	require.ErrorIs(t, err, picocert.ErrNotSelfSigned)
 }
 
@@ -150,7 +155,7 @@ func TestIssueWithIssuer(t *testing.T) {
 
 	// Verify the data with certificate chain
 	certChain := []picocert.Certificate{subjCertWithKey.Cert, issuerCertWithKey.Cert}
-	err = picocert.VerifyAndValidateChain(certChain, data, sig)
+	err = picocert.VerifyAndValidateChain(certChain, &issuerCertWithKey.Cert, data, sig)
 	require.NoError(t, err)
 }
 
@@ -211,7 +216,7 @@ func TestValidate3TierCertChain(t *testing.T) {
 
 	// Create and validate the certificate chain
 	certChain := []picocert.Certificate{leafCert.Cert, intermediateCert.Cert, rootCert.Cert}
-	err = picocert.ValidateCertChain(certChain)
+	err = picocert.ValidateCertChain(certChain, &rootCert.Cert)
 	require.NoError(t, err)
 
 	// Sign data with the leaf private key
@@ -223,12 +228,12 @@ func TestValidate3TierCertChain(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the data with the full certificate chain
-	err = picocert.VerifyAndValidateChain(certChain, data, sig)
+	err = picocert.VerifyAndValidateChain(certChain, &rootCert.Cert, data, sig)
 	require.NoError(t, err)
 
 	// Test with missing intermediate cert
 	invalidChain := []picocert.Certificate{leafCert.Cert, rootCert.Cert}
-	err = picocert.ValidateCertChain(invalidChain)
+	err = picocert.ValidateCertChain(invalidChain, &rootCert.Cert)
 	require.Error(t, err) // Should fail without intermediate
 }
 
@@ -250,7 +255,7 @@ func TestVersionMismatch(t *testing.T) {
 	// Tamper with the version
 	certWithKey.Cert.Version = 99 // Invalid version
 
-	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert})
+	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert}, &certWithKey.Cert)
 	require.Error(t, err)
 	require.Equal(t, picocert.ErrVersionMismatch, err)
 }
@@ -266,7 +271,7 @@ func TestReservedFieldNonZero(t *testing.T) {
 	// Tamper with reserved field
 	certWithKey.Cert.Reserved = 42 // Should be zero
 
-	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert})
+	err = picocert.ValidateCertChain([]picocert.Certificate{certWithKey.Cert}, &certWithKey.Cert)
 	require.Error(t, err)
 	require.Equal(t, picocert.ErrReserved, err)
 }
@@ -294,18 +299,18 @@ func TestInvalidCertSignature(t *testing.T) {
 	chain := []picocert.Certificate{leafCert.Cert, rootCert.Cert}
 
 	// Validation should fail
-	err = picocert.ValidateCertChain(chain)
+	err = picocert.ValidateCertChain(chain, &rootCert.Cert)
 	require.Error(t, err)
 }
 
 func TestEmptyCertChain(t *testing.T) {
 	// Test validate empty chain
-	err := picocert.ValidateCertChain([]picocert.Certificate{})
+	err := picocert.ValidateCertChain([]picocert.Certificate{}, nil)
 	require.Error(t, err)
 	require.Equal(t, picocert.ErrInvalid, err)
 
 	// Test verify and validate with empty chain
-	err = picocert.VerifyAndValidateChain([]picocert.Certificate{}, []byte("data"), []byte("sig"))
+	err = picocert.VerifyAndValidateChain([]picocert.Certificate{}, nil, []byte("data"), []byte("sig"))
 	require.Error(t, err)
 	require.Equal(t, picocert.ErrInvalid, err)
 }
@@ -331,6 +336,204 @@ func TestOutOfOrderChain(t *testing.T) {
 
 	// Test with out of order chain
 	outOfOrderChain := []picocert.Certificate{rootCert.Cert, intermediateCert.Cert, leafCert.Cert}
-	err = picocert.ValidateCertChain(outOfOrderChain)
+	err = picocert.ValidateCertChain(outOfOrderChain, &rootCert.Cert)
 	require.Error(t, err) // Should fail with out of order chain
+}
+
+func TestValidateCertChainRejectsUntrustedRoot(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	oneYear := uint64(365 * 24 * 60 * 60)
+
+	trustedRoot, err := picocert.Issue(nil, "trusted-root", now, now+oneYear)
+	require.NoError(t, err)
+	attackerRoot, err := picocert.Issue(nil, "attacker-root", now, now+oneYear)
+	require.NoError(t, err)
+	attackerLeaf, err := picocert.Issue(attackerRoot, "attacker-leaf", now, now+oneYear)
+	require.NoError(t, err)
+
+	chain := []picocert.Certificate{attackerLeaf.Cert, attackerRoot.Cert}
+	err = picocert.ValidateCertChain(chain, &trustedRoot.Cert)
+	require.ErrorIs(t, err, picocert.ErrUntrustedRoot)
+}
+
+func TestValidateCertChainRequiresTrustAnchor(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+
+	err = picocert.ValidateCertChain([]picocert.Certificate{root.Cert}, nil)
+	require.ErrorIs(t, err, picocert.ErrInvalid)
+}
+
+func TestParsePrivateKeyRejectsUnsupportedCurves(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{name: "P-224", curve: elliptic.P224()},
+		{name: "P-384", curve: elliptic.P384()},
+		{name: "P-521", curve: elliptic.P521()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			privateKey, err := ecdsa.GenerateKey(test.curve, rand.Reader)
+			require.NoError(t, err)
+			_, err = picocert.EncodePrivateKeyToPKCS8(privateKey)
+			require.ErrorIs(t, err, picocert.ErrUnsupportedCurve)
+
+			encoded, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			require.NoError(t, err)
+
+			_, err = picocert.ParsePrivateKey(encoded)
+			require.ErrorIs(t, err, picocert.ErrUnsupportedCurve)
+		})
+	}
+}
+
+func TestSignRejectsUnsupportedCurves(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{name: "P-224", curve: elliptic.P224()},
+		{name: "P-384", curve: elliptic.P384()},
+		{name: "P-521", curve: elliptic.P521()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			privateKey, err := ecdsa.GenerateKey(test.curve, rand.Reader)
+			require.NoError(t, err)
+
+			_, err = picocert.Sign(privateKey, []byte("data"))
+			require.ErrorIs(t, err, picocert.ErrUnsupportedCurve)
+		})
+	}
+}
+
+func TestIssueRejectsIssuerKeyMismatch(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	oneYear := uint64(365 * 24 * 60 * 60)
+	issuer, err := picocert.Issue(nil, "issuer", now, now+oneYear)
+	require.NoError(t, err)
+	otherIssuer, err := picocert.Issue(nil, "other-issuer", now, now+oneYear)
+	require.NoError(t, err)
+
+	mismatchedIssuer := &picocert.CertificateWithKey{
+		Cert:       issuer.Cert,
+		PrivateKey: otherIssuer.PrivateKey,
+	}
+	_, err = picocert.Issue(mismatchedIssuer, "leaf", now, now+oneYear)
+	require.ErrorIs(t, err, picocert.ErrIssuerKeyMismatch)
+}
+
+func TestVerifyRejectsMalformedSignatureLengths(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	cert, err := picocert.Issue(nil, "signer", now, now+60)
+	require.NoError(t, err)
+
+	for _, length := range []int{0, 1, 31, 32, 63, 65, 128} {
+		t.Run(fmt.Sprintf("length-%d", length), func(t *testing.T) {
+			var verifyErr error
+			require.NotPanics(t, func() {
+				verifyErr = picocert.Verify(&cert.Cert, []byte("data"), make([]byte, length))
+			})
+			require.ErrorIs(t, verifyErr, picocert.ErrInvalidSignatureLength)
+		})
+	}
+}
+
+func FuzzVerifySignatureLength(f *testing.F) {
+	now := uint64(time.Now().Unix())
+	cert, err := picocert.Issue(nil, "signer", now, now+60)
+	if err != nil {
+		f.Fatal(err)
+	}
+
+	f.Add([]byte{})
+	f.Add(make([]byte, picocert.MaxSigLen-1))
+	f.Add(make([]byte, picocert.MaxSigLen))
+	f.Add(make([]byte, picocert.MaxSigLen+1))
+	f.Fuzz(func(t *testing.T, signature []byte) {
+		err := picocert.Verify(&cert.Cert, []byte("data"), signature)
+		if len(signature) != picocert.MaxSigLen {
+			require.ErrorIs(t, err, picocert.ErrInvalidSignatureLength)
+		}
+	})
+}
+
+func TestValidationConformanceRejectsUnsupportedAlgorithms(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		mutate      func(*picocert.Certificate)
+		expectedErr error
+	}{
+		{
+			name: "curve",
+			mutate: func(cert *picocert.Certificate) {
+				cert.Curve = picocert.Curve(1)
+			},
+			expectedErr: picocert.ErrUnsupportedCurve,
+		},
+		{
+			name: "hash",
+			mutate: func(cert *picocert.Certificate) {
+				cert.Hash = picocert.Hash(1)
+			},
+			expectedErr: picocert.ErrUnsupportedHash,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cert := root.Cert
+			test.mutate(&cert)
+			err := picocert.ValidateCert(&cert, &cert)
+			require.ErrorIs(t, err, test.expectedErr)
+		})
+	}
+}
+
+func TestValidationConformanceRejectsInvalidValidityPeriod(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	cert, err := picocert.Issue(nil, "root", now+60, now)
+	require.NoError(t, err)
+
+	err = picocert.ValidateCert(&cert.Cert, &cert.Cert)
+	require.ErrorIs(t, err, picocert.ErrInvalidValidityPeriod)
+}
+
+func TestValidationConformanceRejectsEmbeddedNullNameMismatch(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+	leaf, err := picocert.Issue(root, "leaf", now, now+60)
+	require.NoError(t, err)
+
+	root.Cert.Subject = [picocert.MaxNameLen]byte{'A', 0, 'X'}
+	leaf.Cert.Issuer = [picocert.MaxNameLen]byte{'A', 0, 'Y'}
+	rootKey, err := picocert.ParsePrivateKey(root.PrivateKey)
+	require.NoError(t, err)
+	leafSignature, err := picocert.Sign(rootKey, leaf.Cert.SignableBytes())
+	require.NoError(t, err)
+	copy(leaf.Cert.Signature[:], leafSignature)
+
+	err = picocert.ValidateCert(&root.Cert, &leaf.Cert)
+	require.ErrorIs(t, err, picocert.ErrIssuerMismatch)
+}
+
+func TestValidationConformanceEnforcesChainLength(t *testing.T) {
+	now := uint64(time.Now().Unix())
+	root, err := picocert.Issue(nil, "root", now, now+60)
+	require.NoError(t, err)
+
+	maximumChain := make([]picocert.Certificate, picocert.MaxChainLen)
+	for i := range maximumChain {
+		maximumChain[i] = root.Cert
+	}
+	require.NoError(t, picocert.ValidateCertChain(maximumChain, &root.Cert))
+
+	oversizedChain := append(maximumChain, root.Cert)
+	err = picocert.ValidateCertChain(oversizedChain, &root.Cert)
+	require.ErrorIs(t, err, picocert.ErrChainTooLong)
 }

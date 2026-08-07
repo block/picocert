@@ -65,19 +65,21 @@ static picocert_err_t picocert_init_context(picocert_context_t* ctx,
 static picocert_err_t picocert_verify_hash_and_validate_chain(picocert_context_t* ctx,
                                                              const picocert_t* cert_chain,
                                                              const uint32_t chain_len,
-                                                             const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-                                                             const uint8_t signature[ECC_SIG_SIZE]);
+                                                             const picocert_t* trust_anchor,
+                                                             const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+                                                             const uint8_t signature[PICOCERT_ECC_SIG_SIZE]);
 
 // Verify hash with a single certificate (no chain validation)
 static picocert_err_t picocert_verify_hash(picocert_context_t* ctx,
                                            const picocert_t* cert,
-                                           const uint8_t hash[HASH_SHA256_DIGEST_SIZE],
-                                           const uint8_t signature[ECC_SIG_SIZE]);
+                                           const uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE],
+                                           const uint8_t signature[PICOCERT_ECC_SIG_SIZE]);
 
 // Validate certificate chain (without data verification)
 static picocert_err_t picocert_validate_cert_chain(picocert_context_t* ctx,
                                                    const picocert_t* cert_chain,
-                                                   const uint32_t chain_len);
+                                                   const uint32_t chain_len,
+                                                   const picocert_t* trust_anchor);
 
 // Validate a single certificate against its issuer
 static picocert_err_t picocert_validate_cert(picocert_context_t* ctx,
@@ -111,12 +113,14 @@ uint64_t get_current_time(void) {
 picocert_context_t ctx;
 picocert_init_context(&ctx, my_sha256_hash, my_ecc_verify, get_current_time);
 
-picocert_t certs[2]; // [0] = leaf, [1] = root
-// ... fill certs, hash the data, and obtain signature ...
-uint8_t data_hash[HASH_SHA256_DIGEST_SIZE] = { ... };
-uint8_t signature[ECC_SIG_SIZE] = { ... };
+picocert_t certs[2]; // [0] = leaf, [1] = root supplied with the payload
+picocert_t trusted_root; // Load this independently from trusted storage.
+// ... fill certs, load trusted_root, hash the data, and obtain signature ...
+uint8_t data_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE] = { ... };
+uint8_t signature[PICOCERT_ECC_SIG_SIZE] = { ... };
 
-picocert_err_t err = picocert_verify_hash_and_validate_chain(&ctx, certs, 2, data_hash, signature);
+picocert_err_t err = picocert_verify_hash_and_validate_chain(
+    &ctx, certs, 2, &trusted_root, data_hash, signature);
 if (err == PICOCERT_OK) {
     // Data is valid and cert chain is trusted
 } else {
@@ -142,6 +146,7 @@ if (err == PICOCERT_OK) {
 | PICOCERT_ERR_UNSUPPORTED_HASH   | 12    | Unsupported hash algorithm        |
 | PICOCERT_ERR_INVALID_VALIDITY_PERIOD | 13 | Invalid validity period          |
 | PICOCERT_ERR_CHAIN_TOO_LONG     | 14    | Certificate chain too long        |
+| PICOCERT_ERR_UNTRUSTED_ROOT     | 15    | Chain does not end at trusted root |
 | PICOCERT_ERR_UNKNOWN            | 255   | Unknown error                     |
 
 ## CLI Tool
@@ -161,12 +166,17 @@ go build -o picocert
 
 ```bash
 # Create a self-signed root certificate
-picocert issue --subject "MyRoot" --validity_in_days 3650 --self_signed
+picocert issue --subject "MyRoot" --output my-root \
+  --validity_in_days 3650 --self_signed
 
 # Create a certificate signed by an issuer
-picocert issue --subject "MyLeaf" --validity_in_days 365 \
-  --issuer root.pct --issuer_key root.priv.der
+picocert issue --subject "MyLeaf" --output my-leaf --validity_in_days 365 \
+  --issuer my-root.pct --issuer_key my-root.priv.der
 ```
+
+`--subject` is certificate metadata. `--output` is the filesystem path prefix;
+the command creates `<output>.pct` and
+`<output>.priv.der` without replacing existing files.
 
 #### Sign Binary Files
 
@@ -181,9 +191,17 @@ picocert sign --key private.priv.der --binary firmware.bin
 #### Verify Signatures
 
 ```bash
-# Verify a signed binary
-picocert verify --cert certificate.pct --binary firmware.bin --signature firmware.sig
+# Verify a signed binary and its certificate chain against a pinned root
+picocert verify --cert firmware-leaf.pct \
+  --intermediate firmware-intermediate.pct \
+  --root /trusted/firmware-root.pct \
+  --binary firmware.bin --signature firmware.sig
 ```
+
+Pass `--intermediate` more than once for deeper chains, ordered from the leaf's
+issuer toward the root. The `--root` file must come from trusted storage rather
+than from the same untrusted source as the binary and certificate chain. The CLI
+checks every certificate's validity period as part of verification.
 
 ### Global Flags
 
@@ -198,9 +216,9 @@ Use the included script to set up a PKI hierarchy:
 ./three-tier-pki.sh ./cmd/picocert/picocert firmware
 
 # This creates:
-# - firmware-root.pct/priv.der (Root CA, 10-year validity)
-# - firmware-intermediate.pct/priv.der (Intermediate CA, 6-year validity)
-# - firmware-leaf.pct/priv.der (Leaf certificate, 4-year validity)
+# - firmware-root.pct and firmware-root.priv.der (Root CA, 10-year validity)
+# - firmware-intermediate.pct and firmware-intermediate.priv.der (Intermediate CA, 6-year validity)
+# - firmware-leaf.pct and firmware-leaf.priv.der (Leaf certificate, 4-year validity)
 ```
 
 **⚠️ Warning**: The script uses long validity periods. Consider your own needs for production use.
@@ -278,19 +296,25 @@ if err != nil {
 }
 ```
 
+`Verify` only checks that the supplied certificate's public key produced the
+signature. It does not authenticate that certificate or check its validity
+period. Use `VerifyAndValidateChain` with an independently provisioned root for
+authentication.
+
 #### Certificate Chain Validation
 
 ```go
-// Validate a certificate chain
+// Validate a certificate chain against a root loaded from trusted storage.
 chain := []picocert.Certificate{leafCert, intermediateCert, rootCert}
+trustedRoot := loadPinnedRoot()
 
-err := picocert.ValidateCertChain(chain)
+err := picocert.ValidateCertChain(chain, &trustedRoot)
 if err != nil {
     // Chain validation failed
 }
 
 // Verify data against the chain
-err = picocert.VerifyAndValidateChain(chain, data, signature)
+err = picocert.VerifyAndValidateChain(chain, &trustedRoot, data, signature)
 if err != nil {
     // Verification or validation failed
 }
@@ -338,8 +362,9 @@ type CertificateWithKey struct {
 
 // Constants
 const (
-    P256 Curve = 0     // ECDSA P-256
-    Sha256 Hash = 0    // SHA-256
+    P256 Curve = 0       // ECDSA P-256
+    Sha256 Hash = 0      // SHA-256
+    MaxChainLen = 10
 )
 ```
 
@@ -352,19 +377,23 @@ const (
 - Signature is raw ECDSA (r||s, 64 bytes).
 - Timestamps are Unix epoch seconds.
 - Certificate data is stored in little-endian format for embedded compatibility.
+- The C and Go validators both accept at most 10 certificates in a chain.
 
 ## File Formats
 
 - **Certificates**: Binary format (`.pct` extension), 184 bytes each
-- **Private Keys**: PKCS#8 DER format (`.priv.der` extension)
+- **Private Keys**: Unencrypted PKCS#8 DER format (`.priv.der` extension), created
+  with owner-only permissions (`0600`)
 - **Signatures**: Raw binary, 64 bytes (r||s format)
 
 ## Security Considerations
 
-- Private keys should be stored securely and never transmitted in plaintext
+- Private keys are not encrypted. Store them securely and never transmit them in
+  plaintext.
 - Consider using hardware security modules (HSMs) for root CA key storage
 - Implement proper key rotation and certificate renewal procedures
-- Validate certificate chains completely before trusting signatures
+- Provision trust anchors independently from untrusted certificate chains, and
+  pass the expected root to every chain-validation call
 - Use appropriate validity periods for your security requirements
 - Provide secure implementations of the required cryptographic functions
 - The library enforces a maximum chain length to prevent DoS

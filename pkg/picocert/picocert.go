@@ -21,6 +21,7 @@ const (
 	MaxNameLen     = 32
 	MaxPubKeyLen   = 65
 	MaxSigLen      = 64
+	MaxChainLen    = 10
 	CurrentVersion = 1
 )
 
@@ -36,14 +37,21 @@ const (
 )
 
 var (
-	ErrInvalid         = errors.New("invalid")
-	ErrExpired         = errors.New("expired")
-	ErrSignature       = errors.New("signature")
-	ErrIssuerMismatch  = errors.New("issuer mismatch")
-	ErrVersionMismatch = errors.New("version mismatch")
-	ErrReserved        = errors.New("reserved")
-	ErrNotSelfSigned   = errors.New("not self-signed")
-	ErrUnknown         = errors.New("unknown")
+	ErrInvalid                = errors.New("invalid")
+	ErrExpired                = errors.New("expired")
+	ErrSignature              = errors.New("signature")
+	ErrIssuerMismatch         = errors.New("issuer mismatch")
+	ErrIssuerKeyMismatch      = errors.New("issuer private key does not match issuer certificate")
+	ErrVersionMismatch        = errors.New("version mismatch")
+	ErrReserved               = errors.New("reserved")
+	ErrNotSelfSigned          = errors.New("not self-signed")
+	ErrUntrustedRoot          = errors.New("untrusted root")
+	ErrUnsupportedCurve       = errors.New("unsupported curve")
+	ErrUnsupportedHash        = errors.New("unsupported hash")
+	ErrInvalidValidityPeriod  = errors.New("invalid validity period")
+	ErrChainTooLong           = errors.New("certificate chain too long")
+	ErrInvalidSignatureLength = errors.New("invalid signature length")
+	ErrUnknown                = errors.New("unknown")
 )
 
 type Certificate struct {
@@ -135,6 +143,23 @@ func ParseCertificate(data []byte) (*Certificate, error) {
 }
 
 func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64) (*CertificateWithKey, error) {
+	var issuerPrivateKey *ecdsa.PrivateKey
+	if issuer != nil {
+		var err error
+		issuerPrivateKey, err = ParsePrivateKey(issuer.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		issuerPublicKey := elliptic.Marshal(
+			issuerPrivateKey.Curve,
+			issuerPrivateKey.PublicKey.X,
+			issuerPrivateKey.PublicKey.Y,
+		)
+		if !bytes.Equal(issuerPublicKey, issuer.Cert.PubKey[:]) {
+			return nil, ErrIssuerKeyMismatch
+		}
+	}
+
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -160,14 +185,7 @@ func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64
 
 	if issuer != nil {
 		cert.Issuer = issuer.Cert.Subject
-
-		// Parse issuer's private key from PKCS8 format
-		issuerPrivKey, err := ParsePrivateKey(issuer.PrivateKey)
-		if err != nil {
-			return nil, err
-		}
-
-		sig, err := Sign(issuerPrivKey, cert.SignableBytes())
+		sig, err := Sign(issuerPrivateKey, cert.SignableBytes())
 		if err != nil {
 			return nil, err
 		}
@@ -192,6 +210,9 @@ func Issue(issuer *CertificateWithKey, subject string, validFrom, validTo uint64
 
 // EncodePrivateKeyToPKCS8 encodes a private key to PKCS8 format
 func EncodePrivateKeyToPKCS8(privateKey *ecdsa.PrivateKey) ([]byte, error) {
+	if err := validatePrivateKey(privateKey); err != nil {
+		return nil, err
+	}
 	return x509.MarshalPKCS8PrivateKey(privateKey)
 }
 
@@ -207,11 +228,17 @@ func ParsePrivateKey(pkcs8Key []byte) (*ecdsa.PrivateKey, error) {
 	if !ok {
 		return nil, errors.New("not an ECDSA private key")
 	}
+	if err := validatePrivateKey(ecdsaKey); err != nil {
+		return nil, err
+	}
 
 	return ecdsaKey, nil
 }
 
 func Sign(priv *ecdsa.PrivateKey, data []byte) ([]byte, error) {
+	if err := validatePrivateKey(priv); err != nil {
+		return nil, err
+	}
 	hash := sha256.Sum256(data)
 	r, s, err := ecdsa.Sign(rand.Reader, priv, hash[:])
 	if err != nil {
@@ -220,13 +247,33 @@ func Sign(priv *ecdsa.PrivateKey, data []byte) ([]byte, error) {
 	// Fixed length
 	rb := r.Bytes()
 	sb := s.Bytes()
+	componentLen := MaxSigLen / 2
+	if len(rb) > componentLen || len(sb) > componentLen {
+		return nil, errors.New("signature component exceeds P-256 width")
+	}
 	sig := make([]byte, MaxSigLen)
-	copy(sig[32-len(rb):32], rb)
-	copy(sig[64-len(sb):64], sb)
+	copy(sig[componentLen-len(rb):componentLen], rb)
+	copy(sig[MaxSigLen-len(sb):], sb)
 	return sig, nil
 }
 
+func validatePrivateKey(privateKey *ecdsa.PrivateKey) error {
+	if privateKey == nil {
+		return ErrInvalid
+	}
+	if privateKey.Curve != elliptic.P256() {
+		return fmt.Errorf("%w: picocert requires ECDSA P-256", ErrUnsupportedCurve)
+	}
+	return nil
+}
+
 func Verify(cert *Certificate, data, sig []byte) error {
+	if cert == nil {
+		return ErrInvalid
+	}
+	if len(sig) != MaxSigLen {
+		return fmt.Errorf("%w: got %d bytes, want %d", ErrInvalidSignatureLength, len(sig), MaxSigLen)
+	}
 	hash := sha256.Sum256(data)
 
 	// Use ecdh.P256 to parse the public key bytes
@@ -253,11 +300,26 @@ func Verify(cert *Certificate, data, sig []byte) error {
 }
 
 func ValidateCert(issuer, subject *Certificate) error {
+	if issuer == nil || subject == nil {
+		return ErrInvalid
+	}
 	if issuer.Version != CurrentVersion || subject.Version != CurrentVersion {
 		return ErrVersionMismatch
 	}
+	if issuer.Curve != P256 || subject.Curve != P256 {
+		return ErrUnsupportedCurve
+	}
+	if issuer.Hash != Sha256 || subject.Hash != Sha256 {
+		return ErrUnsupportedHash
+	}
 	if issuer.Reserved != 0 || subject.Reserved != 0 {
 		return ErrReserved
+	}
+	if issuer.ValidFrom > issuer.ValidTo || subject.ValidFrom > subject.ValidTo {
+		return ErrInvalidValidityPeriod
+	}
+	if err := Verify(issuer, subject.SignableBytes(), subject.Signature[:]); err != nil {
+		return err
 	}
 	if issuer.Subject != subject.Issuer {
 		return ErrIssuerMismatch
@@ -267,12 +329,19 @@ func ValidateCert(issuer, subject *Certificate) error {
 		now < issuer.ValidFrom || now > issuer.ValidTo {
 		return ErrExpired
 	}
-	return Verify(issuer, subject.SignableBytes(), subject.Signature[:])
+	return nil
 }
 
-func ValidateCertChain(chain []Certificate) error {
-	if len(chain) == 0 {
+func ValidateCertChain(chain []Certificate, trustAnchor *Certificate) error {
+	if len(chain) == 0 || trustAnchor == nil {
 		return ErrInvalid
+	}
+	if len(chain) > MaxChainLen {
+		return ErrChainTooLong
+	}
+	root := chain[len(chain)-1]
+	if root != *trustAnchor {
+		return ErrUntrustedRoot
 	}
 	for i := 0; i < len(chain)-1; i++ {
 		err := ValidateCert(&chain[i+1], &chain[i])
@@ -280,18 +349,17 @@ func ValidateCertChain(chain []Certificate) error {
 			return err
 		}
 	}
-	root := chain[len(chain)-1]
 	if !root.IsSelfSigned() {
 		return ErrNotSelfSigned
 	}
 	return ValidateCert(&root, &root)
 }
 
-func VerifyAndValidateChain(chain []Certificate, data, sig []byte) error {
-	if len(chain) == 0 || len(data) == 0 {
+func VerifyAndValidateChain(chain []Certificate, trustAnchor *Certificate, data, sig []byte) error {
+	if len(chain) == 0 || trustAnchor == nil || len(data) == 0 {
 		return ErrInvalid
 	}
-	if err := ValidateCertChain(chain); err != nil {
+	if err := ValidateCertChain(chain, trustAnchor); err != nil {
 		return err
 	}
 	return Verify(&chain[0], data, sig)

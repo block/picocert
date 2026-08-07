@@ -36,7 +36,7 @@ uint64_t mock_time_callback(void) { return mock_current_time; }
 
 bool openssl_sha256_hash(const uint8_t* data, uint32_t data_len,
                          uint8_t* digest, uint32_t digest_len) {
-  if (digest_len < HASH_SHA256_DIGEST_SIZE) {
+  if (digest_len < PICOCERT_HASH_SHA256_DIGEST_SIZE) {
     return false;
   }
 
@@ -62,7 +62,7 @@ bool openssl_sha256_hash(const uint8_t* data, uint32_t data_len,
   }
 
   EVP_MD_CTX_free(ctx);
-  return (digest_len_out == HASH_SHA256_DIGEST_SIZE);
+  return (digest_len_out == PICOCERT_HASH_SHA256_DIGEST_SIZE);
 }
 
 /**
@@ -71,11 +71,12 @@ bool openssl_sha256_hash(const uint8_t* data, uint32_t data_len,
 bool openssl_ecc_verify(const uint8_t* key, size_t key_size,
                         const uint8_t* hash, uint32_t hash_len,
                         const uint8_t* signature) {
-  if (!key || !hash || !signature || hash_len != HASH_SHA256_DIGEST_SIZE) {
+  if (!key || !hash || !signature ||
+      hash_len != PICOCERT_HASH_SHA256_DIGEST_SIZE) {
     return false;
   }
 
-  if (key_size != ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED) {
+  if (key_size != PICOCERT_ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED) {
     return false;
   }
 
@@ -172,6 +173,17 @@ bool openssl_ecc_verify(const uint8_t* key, size_t key_size,
   return (result == 1);
 }
 
+bool accept_all_ecc_signatures(const uint8_t* key, size_t key_size,
+                               const uint8_t* hash, uint32_t hash_len,
+                               const uint8_t* signature) {
+  (void)key;
+  (void)key_size;
+  (void)hash;
+  (void)hash_len;
+  (void)signature;
+  return true;
+}
+
 // Helper function to initialize picocert context for testing with OpenSSL
 picocert_err_t init_picocert_context_for_testing(picocert_context_t* ctx) {
   return picocert_init_context(ctx, openssl_sha256_hash, openssl_ecc_verify,
@@ -223,7 +235,7 @@ picocert_t create_test_cert(const char* issuer, const char* subject,
       uint8_t cert_data[sizeof(picocert_t) - sizeof(cert.signature)];
       memcpy(cert_data, &cert, sizeof(cert_data));
 
-      uint8_t hash[HASH_SHA256_DIGEST_SIZE];
+      uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE];
       if (openssl_sha256_hash(cert_data, sizeof(cert_data), hash,
                               sizeof(hash))) {
         ECDSA_SIG* sig = ECDSA_do_sign(hash, sizeof(hash), ec_key);
@@ -318,7 +330,7 @@ cert_with_key_t create_cert_with_key(const char* issuer, const char* subject,
     memcpy(cert_data, cert, sizeof(cert_data));
 
     // Hash the certificate data
-    uint8_t hash[HASH_SHA256_DIGEST_SIZE];
+    uint8_t hash[PICOCERT_HASH_SHA256_DIGEST_SIZE];
     if (openssl_sha256_hash(cert_data, sizeof(cert_data), hash, sizeof(hash))) {
       // Sign with the issuer's private key (or own key if self-signed)
       EC_KEY* signing_key = issuer_private_key ? issuer_private_key : ec_key;
@@ -425,7 +437,7 @@ int test_3tier_pki_validation(void) {
 
   picocert_t cert_chain[3] = {leaf_cert.cert, intermediate_ca.cert,
                               root_ca.cert};
-  err = picocert_validate_cert_chain(&ctx, cert_chain, 3);
+  err = picocert_validate_cert_chain(&ctx, cert_chain, 3, &root_ca.cert);
   TEST_ASSERT(err == PICOCERT_OK,
               "Full 3-tier certificate chain validation should succeed");
   printf("✓ Full 3-tier certificate chain validation passed\n");
@@ -438,7 +450,7 @@ int test_3tier_pki_validation(void) {
   uint32_t data_len = strlen(test_data);
 
   // Hash the data
-  uint8_t data_hash[HASH_SHA256_DIGEST_SIZE];
+  uint8_t data_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE];
   TEST_ASSERT(openssl_sha256_hash((const uint8_t*)test_data, data_len,
                                   data_hash, sizeof(data_hash)),
               "Data hashing should succeed");
@@ -449,7 +461,7 @@ int test_3tier_pki_validation(void) {
   TEST_ASSERT(sig != NULL, "Data signing should succeed");
 
   // Convert signature to raw format
-  uint8_t signature[ECC_SIG_SIZE] = {0};
+  uint8_t signature[PICOCERT_ECC_SIG_SIZE] = {0};
   const BIGNUM* r = ECDSA_SIG_get0_r(sig);
   const BIGNUM* s = ECDSA_SIG_get0_s(sig);
 
@@ -470,15 +482,15 @@ int test_3tier_pki_validation(void) {
   printf("✓ Signature verification with leaf certificate passed\n");
 
   // Test full end-to-end verification: validate chain + verify data
-  err = picocert_verify_hash_and_validate_chain(&ctx, cert_chain, 3, data_hash,
-                                                signature);
+  err = picocert_verify_hash_and_validate_chain(
+      &ctx, cert_chain, 3, &root_ca.cert, data_hash, signature);
   TEST_ASSERT(err == PICOCERT_OK,
               "Full end-to-end verification should succeed");
   printf("✓ Full end-to-end verification (chain + data) passed\n");
 
   // Test the hash-based data verification API with certificate chain validation
-  err = picocert_verify_hash_and_validate_chain(&ctx, cert_chain, 3, data_hash,
-                                                signature);
+  err = picocert_verify_hash_and_validate_chain(
+      &ctx, cert_chain, 3, &root_ca.cert, data_hash, signature);
   TEST_ASSERT(err == PICOCERT_OK,
               "Full data verification with chain should succeed");
   printf("✓ Full data verification with chain passed\n");
@@ -492,14 +504,14 @@ int test_3tier_pki_validation(void) {
   uint32_t tampered_len = strlen(tampered_data);
 
   // Hash the tampered data
-  uint8_t tampered_hash[HASH_SHA256_DIGEST_SIZE];
+  uint8_t tampered_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE];
   TEST_ASSERT(openssl_sha256_hash((const uint8_t*)tampered_data, tampered_len,
                                   tampered_hash, sizeof(tampered_hash)),
               "Tampered data hashing should succeed");
 
   // Try to verify with original signature (should fail)
-  err = picocert_verify_hash_and_validate_chain(&ctx, cert_chain, 3,
-                                                tampered_hash, signature);
+  err = picocert_verify_hash_and_validate_chain(
+      &ctx, cert_chain, 3, &root_ca.cert, tampered_hash, signature);
   TEST_ASSERT(err == PICOCERT_ERR_SIGNATURE,
               "Tampered data should fail verification");
   printf("✓ Tampered data correctly rejected\n");
@@ -507,14 +519,22 @@ int test_3tier_pki_validation(void) {
   // Test with wrong certificate order
   picocert_t wrong_order_chain[3] = {root_ca.cert, intermediate_ca.cert,
                                      leaf_cert.cert};
-  err = picocert_validate_cert_chain(&ctx, wrong_order_chain, 3);
+  err = picocert_validate_cert_chain(&ctx, wrong_order_chain, 3,
+                                     &root_ca.cert);
   TEST_ASSERT(err != PICOCERT_OK,
               "Wrong certificate order should fail validation");
   printf("✓ Wrong certificate order correctly rejected\n");
 
   // Test with missing intermediate certificate
   picocert_t incomplete_chain[2] = {leaf_cert.cert, root_ca.cert};
-  err = picocert_validate_cert_chain(&ctx, incomplete_chain, 2);
+  err = picocert_validate_cert_chain(&ctx, incomplete_chain, 2, &root_ca.cert);
+
+  // A valid attacker-controlled chain must not validate against another root.
+  picocert_t untrusted_root = root_ca.cert;
+  untrusted_root.public_key[1] ^= 0x01;
+  err = picocert_validate_cert_chain(&ctx, cert_chain, 3, &untrusted_root);
+  TEST_ASSERT(err == PICOCERT_ERR_UNTRUSTED_ROOT,
+              "Chain should be rejected when its root is not trusted");
   TEST_ASSERT(err != PICOCERT_OK,
               "Incomplete certificate chain should fail validation");
   printf("✓ Incomplete certificate chain correctly rejected\n");
@@ -578,7 +598,7 @@ int test_key_extraction(void) {
   picocert_err_t err = picocert_cert_to_key(&cert, &key, &key_size);
   TEST_ASSERT(err == PICOCERT_OK, "Should successfully extract key");
   TEST_ASSERT(key != NULL, "Key pointer should not be NULL");
-  TEST_ASSERT(key_size == ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED,
+  TEST_ASSERT(key_size == PICOCERT_ECC_PUBKEY_SIZE_ECDSA_UNCOMPRESSED,
               "Key size should be correct");
   TEST_ASSERT(key == &cert.public_key[1],
               "Key should point to correct location");
@@ -641,6 +661,38 @@ int test_self_signed_detection(void) {
               "Should detect self-signed cert");
   TEST_ASSERT(!picocert_is_self_signed(&not_self_signed),
               "Should detect non-self-signed cert");
+
+  picocert_t embedded_null_names = {0};
+  embedded_null_names.issuer[0] = 'A';
+  embedded_null_names.issuer[2] = 'X';
+  embedded_null_names.subject[0] = 'A';
+  embedded_null_names.subject[2] = 'Y';
+  TEST_ASSERT(!picocert_is_self_signed(&embedded_null_names),
+              "Bytes after an embedded NUL must be compared");
+
+  TEST_PASS();
+}
+
+int test_fixed_width_name_validation(void) {
+  picocert_context_t ctx = {0};
+  picocert_err_t err = picocert_init_context(
+      &ctx, openssl_sha256_hash, accept_all_ecc_signatures, mock_time_callback);
+  TEST_ASSERT(err == PICOCERT_OK, "Context initialization should succeed");
+
+  picocert_t issuer = create_test_cert(
+      "issuer", "issuer", mock_current_time - 1000, mock_current_time + 1000);
+  picocert_t subject = create_test_cert(
+      "issuer", "subject", mock_current_time - 1000, mock_current_time + 1000);
+  memset(issuer.subject, 0, sizeof(issuer.subject));
+  memset(subject.issuer, 0, sizeof(subject.issuer));
+  issuer.subject[0] = 'A';
+  issuer.subject[2] = 'X';
+  subject.issuer[0] = 'A';
+  subject.issuer[2] = 'Y';
+
+  err = picocert_validate_cert(&ctx, &issuer, &subject);
+  TEST_ASSERT(err == PICOCERT_ERR_ISSUER,
+              "Issuer names must differ when bytes after a NUL differ");
 
   TEST_PASS();
 }
@@ -744,13 +796,13 @@ int test_hash_verification(void) {
       create_test_cert("TestCert", "TestCert", mock_current_time - 1000,
                        mock_current_time + 1000);
 
-  uint8_t test_hash[HASH_SHA256_DIGEST_SIZE] = {0};
-  for (int i = 0; i < HASH_SHA256_DIGEST_SIZE; i++) {
+  uint8_t test_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE] = {0};
+  for (int i = 0; i < PICOCERT_HASH_SHA256_DIGEST_SIZE; i++) {
     test_hash[i] = (uint8_t)(i + 0x30);
   }
 
-  uint8_t test_signature[ECC_SIG_SIZE] = {0};
-  for (int i = 0; i < ECC_SIG_SIZE; i++) {
+  uint8_t test_signature[PICOCERT_ECC_SIG_SIZE] = {0};
+  for (int i = 0; i < PICOCERT_ECC_SIG_SIZE; i++) {
     test_signature[i] = (uint8_t)(i + 0x40);
   }
 
@@ -784,8 +836,8 @@ int test_data_verification(void) {
       create_test_cert("TestCert", "TestCert", mock_current_time - 1000,
                        mock_current_time + 1000);
 
-  uint8_t test_hash[HASH_SHA256_DIGEST_SIZE] = {0};
-  uint8_t test_signature[ECC_SIG_SIZE] = {0};
+  uint8_t test_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE] = {0};
+  uint8_t test_signature[PICOCERT_ECC_SIG_SIZE] = {0};
 
   // Test hash verification (will fail with random signature, but tests the API)
   picocert_err_t err =
@@ -823,21 +875,24 @@ int test_certificate_chain_validation(void) {
   picocert_t chain[2] = {leaf, root};
 
   // Test chain validation (will fail with mismatched keys, but tests the API)
-  picocert_err_t err = picocert_validate_cert_chain(&ctx, chain, 2);
+  picocert_err_t err = picocert_validate_cert_chain(&ctx, chain, 2, &root);
   TEST_ASSERT(err == PICOCERT_ERR_SIGNATURE,
               "Chain validation should fail with mismatched keys");
 
   // Test with NULL context
-  err = picocert_validate_cert_chain(NULL, chain, 2);
+  err = picocert_validate_cert_chain(NULL, chain, 2, &root);
   TEST_ASSERT(err == PICOCERT_ERR_INVALID, "NULL context should fail");
 
   // Test with NULL chain
-  err = picocert_validate_cert_chain(&ctx, NULL, 2);
+  err = picocert_validate_cert_chain(&ctx, NULL, 2, &root);
   TEST_ASSERT(err == PICOCERT_ERR_INVALID, "NULL chain should fail");
 
   // Test with zero length
-  err = picocert_validate_cert_chain(&ctx, chain, 0);
+  err = picocert_validate_cert_chain(&ctx, chain, 0, &root);
   TEST_ASSERT(err == PICOCERT_ERR_INVALID, "Zero length chain should fail");
+
+  err = picocert_validate_cert_chain(&ctx, chain, 2, NULL);
+  TEST_ASSERT(err == PICOCERT_ERR_INVALID, "NULL trust anchor should fail");
 
   TEST_PASS();
 }
@@ -893,8 +948,8 @@ int test_uninitialized_library(void) {
   picocert_t cert = create_test_cert("Test", "Test", mock_current_time - 1000,
                                      mock_current_time + 1000);
 
-  uint8_t test_hash[HASH_SHA256_DIGEST_SIZE] = {0};
-  uint8_t test_signature[ECC_SIG_SIZE] = {0};
+  uint8_t test_hash[PICOCERT_HASH_SHA256_DIGEST_SIZE] = {0};
+  uint8_t test_signature[PICOCERT_ECC_SIG_SIZE] = {0};
 
   // These should fail because context is not initialized
   picocert_err_t err =
@@ -1022,7 +1077,8 @@ int test_chain_length_limits(void) {
       create_test_cert("Root", "Root", mock_current_time - 1000,
                        mock_current_time + 1000)};
 
-  picocert_err_t err = picocert_validate_cert_chain(&ctx, valid_chain, 3);
+  picocert_err_t err =
+      picocert_validate_cert_chain(&ctx, valid_chain, 3, &valid_chain[2]);
   // Note: This will fail due to signature mismatch, but that's after the length
   // check
   TEST_ASSERT(err != PICOCERT_ERR_INVALID || err == PICOCERT_ERR_SIGNATURE,
@@ -1035,7 +1091,9 @@ int test_chain_length_limits(void) {
                                     mock_current_time + 1000);
   }
 
-  err = picocert_validate_cert_chain(&ctx, max_chain, PICOCERT_MAX_CHAIN_LEN);
+  err = picocert_validate_cert_chain(
+      &ctx, max_chain, PICOCERT_MAX_CHAIN_LEN,
+      &max_chain[PICOCERT_MAX_CHAIN_LEN - 1]);
   // Should pass the length check (may fail later for other reasons)
   TEST_ASSERT(err != PICOCERT_ERR_INVALID || err == PICOCERT_ERR_SIGNATURE,
               "Maximum chain length should pass length check");
@@ -1047,14 +1105,15 @@ int test_chain_length_limits(void) {
         "Test", "Test", mock_current_time - 1000, mock_current_time + 1000);
   }
 
-  err = picocert_validate_cert_chain(&ctx, oversized_chain,
-                                     PICOCERT_MAX_CHAIN_LEN + 1);
+  err = picocert_validate_cert_chain(
+      &ctx, oversized_chain, PICOCERT_MAX_CHAIN_LEN + 1,
+      &oversized_chain[PICOCERT_MAX_CHAIN_LEN]);
   TEST_ASSERT(
       err == PICOCERT_ERR_CHAIN_TOO_LONG,
       "Oversized chain should be rejected with PICOCERT_ERR_CHAIN_TOO_LONG");
 
   // Test with zero length (edge case)
-  err = picocert_validate_cert_chain(&ctx, valid_chain, 0);
+  err = picocert_validate_cert_chain(&ctx, valid_chain, 0, &valid_chain[2]);
   TEST_ASSERT(err == PICOCERT_ERR_INVALID,
               "Zero length chain should be rejected");
 
@@ -1216,6 +1275,7 @@ int main(void) {
       test_key_extraction,
       test_certificate_structure,
       test_self_signed_detection,
+      test_fixed_width_name_validation,
       test_time_callback,
       test_certificate_time_validation,
       test_hash_verification,

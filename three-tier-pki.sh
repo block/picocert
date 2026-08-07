@@ -20,10 +20,10 @@ if [ "$confirmation" != "yes" ]; then
 fi
 
 # Generate a root CA key and certificate, 10 year validity.
-$CA_TOOL issue --subject $PURPOSE-root --validity_in_days 3650 --self_signed
+"$CA_TOOL" issue --subject "$PURPOSE-root" --output "$PURPOSE-root" --validity_in_days 3650 --self_signed
 
 # Generate an intermediate CA key and certificate, 6 year validity.
-$CA_TOOL issue --subject $PURPOSE-intermediate --validity_in_days 2190 --issuer $PURPOSE-root.pct --issuer_key $PURPOSE-root.priv.der
+"$CA_TOOL" issue --subject "$PURPOSE-intermediate" --output "$PURPOSE-intermediate" --validity_in_days 2190 --issuer "$PURPOSE-root.pct" --issuer_key "$PURPOSE-root.priv.der"
 
 # And the leaf, 4 year validity.
-$CA_TOOL issue --subject $PURPOSE-leaf --validity_in_days 1460 --issuer $PURPOSE-intermediate.pct --issuer_key $PURPOSE-intermediate.priv.der
+"$CA_TOOL" issue --subject "$PURPOSE-leaf" --output "$PURPOSE-leaf" --validity_in_days 1460 --issuer "$PURPOSE-intermediate.pct" --issuer_key "$PURPOSE-intermediate.priv.der"
